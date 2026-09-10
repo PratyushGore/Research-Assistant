@@ -1,0 +1,169 @@
+from enum import Enum
+from typing import Optional
+from pydantic import BaseModel, Field
+
+
+class OutputType(str, Enum):
+    LITERATURE_SURVEY = "Literature Survey"
+    EXECUTIVE_SUMMARY = "Executive Summary"
+    PPT = "PPT"
+    RESEARCH_PAPER = "Research Paper"
+
+
+class CoverInfo(BaseModel):
+    title: str
+    subtitle: Optional[str] = None
+    authors: list[str] = Field(default_factory=list)
+    institution: Optional[str] = None
+    date: Optional[str] = None
+
+
+class ProjectPresentationInfo(BaseModel):
+    target_audience: Optional[str] = None
+    num_slides: Optional[int] = None
+    presentation_tone: Optional[str] = None
+    key_focus_areas: list[str] = Field(default_factory=list)
+
+
+class AcademicContentInfo(BaseModel):
+    target_venue_or_journal: Optional[str] = None
+    citation_style: str = "APA"
+    methodology_preference: Optional[str] = None
+    keywords: list[str] = Field(default_factory=list)
+
+
+class OutputTemplate(BaseModel):
+    template_id: str
+    output_type: OutputType
+    sections: list[str] = Field(default_factory=list)
+    guidelines: Optional[str] = None
+
+
+class GuidedInputBundle(BaseModel):
+    research_topic: str
+    output_types: list[OutputType]
+    cover_info: Optional[CoverInfo] = None
+    presentation_info: Optional[ProjectPresentationInfo] = None
+    academic_info: Optional[AcademicContentInfo] = None
+    user_notes: Optional[str] = None
+
+
+class PaperMetadata(BaseModel):
+    paper_id: str
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    abstract: Optional[str] = None
+    year: Optional[int] = None
+    url: Optional[str] = None
+    venue: Optional[str] = None
+    doi: Optional[str] = None
+
+
+class SearchResult(BaseModel):
+    query: str
+    papers: list[PaperMetadata] = Field(default_factory=list)
+    total_results: int = 0
+
+
+class Chunk(BaseModel):
+    chunk_id: str
+    paper_id: str
+    text: str
+    section_heading: Optional[str] = None
+    page_number: Optional[int] = None
+
+
+class IngestionResult(BaseModel):
+    paper_id: str
+    metadata: PaperMetadata
+    chunks: list[Chunk] = Field(default_factory=list)
+    raw_text: Optional[str] = None
+
+
+class Claim(BaseModel):
+    claim_id: str
+    text: str
+    source_paper_id: str
+    source_chunk_ids: list[str] = Field(default_factory=list)
+    verification_status: str = "pending"
+    revision_attempts: int = 0
+
+
+class PaperSummary(BaseModel):
+    paper_id: str
+    summary: str
+    key_findings: list[str] = Field(default_factory=list)
+    extracted_claims: list[Claim] = Field(default_factory=list)
+
+
+class FindingsPacket(BaseModel):
+    topic: str
+    summaries: list[PaperSummary] = Field(default_factory=list)
+    claims: list[Claim] = Field(default_factory=list)
+
+
+class VerificationResult(BaseModel):
+    claim_id: str
+    verification_status: str
+    confidence_score: float = 0.0
+    explanation: str = ""
+    supporting_chunk_ids: list[str] = Field(default_factory=list)
+
+
+class FormattedCitation(BaseModel):
+    citation_id: str
+    paper_id: str
+    citation_style: str
+    inline_marker: str
+    full_entry: str
+
+
+class CitationResult(BaseModel):
+    citation_style: str
+    citations: list[FormattedCitation] = Field(default_factory=list)
+    bibliography: list[str] = Field(default_factory=list)
+
+
+class ComposerRequest(BaseModel):
+    output_type: OutputType
+    guided_input: GuidedInputBundle
+    findings: FindingsPacket
+    verification_results: list[VerificationResult] = Field(default_factory=list)
+    citation_result: CitationResult
+    template: Optional[OutputTemplate] = None
+
+
+class ComposerResult(BaseModel):
+    output_type: OutputType
+    title: str
+    content: str
+    sections: dict[str, str] = Field(default_factory=dict)
+    citations_used: list[str] = Field(default_factory=list)
+
+
+class QARequest(BaseModel):
+    composer_result: ComposerResult
+    findings: FindingsPacket
+    verification_results: list[VerificationResult] = Field(default_factory=list)
+    citation_result: CitationResult
+
+
+class QAResponse(BaseModel):
+    passed: bool
+    score: float = 0.0
+    feedback: str = ""
+    issues: list[str] = Field(default_factory=list)
+    suggested_revisions: Optional[str] = None
+
+
+class PipelineRequest(BaseModel):
+    request_id: str
+    guided_input: GuidedInputBundle
+
+
+class PipelineStatus(BaseModel):
+    request_id: str
+    status: str = "pending"
+    current_agent: Optional[str] = None
+    completed_deliverables: list[ComposerResult] = Field(default_factory=list)
+    error_message: Optional[str] = None
