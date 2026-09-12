@@ -9,8 +9,10 @@ from backend.schemas.schemas import (
     VerificationResult,
     CitationResult,
     ComposerResult,
-    QARequest,
-    QAResponse,
+    DocumentReviewRequest,
+    DocumentReviewResult,
+    UserQARequest,
+    UserQAResponse,
     PipelineStatus,
 )
 
@@ -25,8 +27,10 @@ class PipelineState(TypedDict, total=False):
     verification_results: Optional[list[VerificationResult]]
     citations: Optional[CitationResult]
     composer_results: Optional[list[ComposerResult]]
-    qa_request: Optional[QARequest]
-    qa_response: Optional[QAResponse]
+    document_review_request: Optional[DocumentReviewRequest]
+    document_review_result: Optional[DocumentReviewResult]
+    user_qa_request: Optional[UserQARequest]
+    user_qa_response: Optional[UserQAResponse]
     status: Optional[PipelineStatus]
 
 
@@ -71,8 +75,13 @@ def composer_agent(state: PipelineState) -> PipelineState:
     return state
 
 
-def qa_agent(state: PipelineState) -> PipelineState:
-    print("[STUB] qa_agent called")
+def document_review_agent(state: PipelineState) -> PipelineState:
+    print("[STUB] document_review_agent called")
+    return state
+
+
+def user_qa_agent(state: PipelineState) -> PipelineState:
+    print("[STUB] user_qa_agent called")
     return state
 
 
@@ -92,7 +101,7 @@ builder.add_node("summarization", summarization_agent)
 builder.add_node("verification", verification_agent)
 builder.add_node("citation", citation_agent)
 builder.add_node("composer", composer_agent)
-builder.add_node("qa", qa_agent)
+builder.add_node("document_review", document_review_agent)
 
 # Wire the primary linear pipeline
 builder.add_edge(START, "guided_input")
@@ -104,8 +113,8 @@ builder.add_edge("verification", "citation")
 builder.add_edge("citation", "composer")
 builder.add_edge("composer", END)
 
-# QA terminal edge in main graph structure
-builder.add_edge("qa", END)
+# Document review terminal edge in main graph structure
+builder.add_edge("document_review", END)
 
 # Compiled main pipeline executable
 graph = builder.compile()
@@ -117,8 +126,8 @@ graph = builder.compile()
 # ---------------------------------------------------------------------------
 
 qa_builder = StateGraph(PipelineState)
-qa_builder.add_node("qa", qa_agent)
-qa_builder.add_edge(START, "qa")
-qa_builder.add_edge("qa", END)
+qa_builder.add_node("user_qa", user_qa_agent)
+qa_builder.add_edge(START, "user_qa")
+qa_builder.add_edge("user_qa", END)
 
 qa_graph = qa_builder.compile()

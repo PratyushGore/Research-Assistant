@@ -141,19 +141,29 @@ class ComposerResult(BaseModel):
     citations_used: list[str] = Field(default_factory=list)
 
 
-class QARequest(BaseModel):
+class DocumentReviewRequest(BaseModel):
     composer_result: ComposerResult
     findings: FindingsPacket
     verification_results: list[VerificationResult] = Field(default_factory=list)
     citation_result: CitationResult
 
 
-class QAResponse(BaseModel):
+class DocumentReviewResult(BaseModel):
     passed: bool
     score: float = 0.0
     feedback: str = ""
     issues: list[str] = Field(default_factory=list)
     suggested_revisions: Optional[str] = None
+
+
+class UserQARequest(BaseModel):
+    question: str
+    topic: str
+
+
+class UserQAResponse(BaseModel):
+    answer: str
+    source_paper_ids: list[str] = Field(default_factory=list)
 
 
 class PipelineRequest(BaseModel):
