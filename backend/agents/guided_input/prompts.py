@@ -1,11 +1,9 @@
 """
 Prompt definitions for the Guided Input Agent.
 
-These prompts are used only for conversational guidance.
-Basic validation should remain deterministic and should not depend
-on an LLM.
+These prompts are deterministic user-facing instructions.
+They do not require an LLM.
 """
-
 
 TOPIC_PROMPT = """
 Please enter your research topic or research question.
@@ -40,48 +38,42 @@ Please provide the following cover information:
 PRESENTATION_INFO_PROMPT = """
 You selected PPT generation.
 
-Please provide the following project presentation information:
-
-- Target Audience (optional)
-- Number of Slides (optional)
-- Presentation Tone (optional)
-- Key Focus Areas (optional)
-
-Additionally, provide your project-specific information:
+Please provide your project presentation information:
 
 - Problem Statement
 - Tech Stack
-- System Architecture / Approach
-- Own Results
-- Project Timeline
+- Own Architecture Summary
+- Own Results Summary
+- Project Timeline (optional)
 
-Do not provide information that has not actually been established for your project.
+Only provide information that has actually been established
+for your project.
 """.strip()
 
 
 ACADEMIC_INFO_PROMPT = """
 You selected Research Paper generation.
 
-Please provide the following academic information:
+Please provide your academic content information:
 
-- Target Venue or Journal (optional)
-- Citation Style (default: APA)
-- Methodology Used
+- Methodology
 - Dataset / Sample Details
-- Tools / Instruments
+- Tools Used
 - What Was Measured
 - Key Results
-- Limitations
-- Keywords (optional)
+- Limitations (optional)
 
-Do not provide information that has not actually been established for your project.
+Only provide information that has actually been established
+for your project.
 """.strip()
 
 
 USER_NOTES_PROMPT = """
-Do you have any additional instructions or notes for the generated outputs?
+Do you have any additional instructions or notes for the
+generated outputs?
 
-This is optional. You can leave it blank if you have nothing else to add.
+This is optional. You can leave it blank if you have nothing
+else to add.
 """.strip()
 
 
