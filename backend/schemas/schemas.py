@@ -19,17 +19,20 @@ class CoverInfo(BaseModel):
 
 
 class ProjectPresentationInfo(BaseModel):
-    target_audience: Optional[str] = None
-    num_slides: Optional[int] = None
-    presentation_tone: Optional[str] = None
-    key_focus_areas: list[str] = Field(default_factory=list)
+    problem_statement: str
+    tech_stack: list[str]
+    own_architecture_summary: str
+    own_results_summary: str
+    project_timeline: Optional[str] = None
 
 
 class AcademicContentInfo(BaseModel):
-    target_venue_or_journal: Optional[str] = None
-    citation_style: str = "APA"
-    methodology_preference: Optional[str] = None
-    keywords: list[str] = Field(default_factory=list)
+    methodology: str
+    dataset_or_sample: str
+    tools_used: list[str]
+    what_was_measured: str
+    key_results: str
+    limitations: Optional[str] = None
 
 
 class OutputTemplate(BaseModel):
