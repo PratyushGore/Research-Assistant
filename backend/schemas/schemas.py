@@ -4,10 +4,10 @@ from pydantic import BaseModel, Field
 
 
 class OutputType(str, Enum):
-    LITERATURE_SURVEY = "Literature Survey"
-    EXECUTIVE_SUMMARY = "Executive Summary"
-    PPT = "PPT"
-    RESEARCH_PAPER = "Research Paper"
+    LITERATURE_SURVEY = "literature_survey"
+    EXECUTIVE_SUMMARY = "executive_summary"
+    PPT = "ppt"
+    RESEARCH_PAPER = "research_paper"
 
 
 class CoverInfo(BaseModel):
