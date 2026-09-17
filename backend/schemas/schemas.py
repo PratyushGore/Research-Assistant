@@ -43,12 +43,9 @@ class OutputTemplate(BaseModel):
 
 
 class GuidedInputBundle(BaseModel):
-    research_topic: str
-    output_types: list[OutputType]
-    cover_info: Optional[CoverInfo] = None
-    presentation_info: Optional[ProjectPresentationInfo] = None
-    academic_info: Optional[AcademicContentInfo] = None
-    user_notes: Optional[str] = None
+    cover_info: CoverInfo
+    project_presentation_info: Optional[ProjectPresentationInfo] = None
+    academic_content_info: Optional[AcademicContentInfo] = None
 
 
 class PaperMetadata(BaseModel):
@@ -171,7 +168,8 @@ class UserQAResponse(BaseModel):
 
 class PipelineRequest(BaseModel):
     request_id: str
-    guided_input: GuidedInputBundle
+    topic: str
+    selected_outputs: list[OutputType]
 
 
 class PipelineStatus(BaseModel):
