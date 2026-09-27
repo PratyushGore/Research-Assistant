@@ -139,238 +139,53 @@ def ingestion_agent(state: PipelineState) -> PipelineState:
 
 
 def summarization_agent(state: PipelineState) -> PipelineState:
-    """
-    Create FindingsPacket from the ingested research papers.
+    """Run Person B's Summarization Agent (Gemini-powered, map-reduce)."""
+    from backend.agents.summarization.agent import run_summarization
+    from backend.schemas.schemas import FindingsPacket
 
-    Uses the extracted PDF text and chunks produced by the
-    Ingestion Agent. This implementation does not require an
-    external LLM/API.
-    """
-
-    from backend.schemas.schemas import FindingsPacket, PaperSummary, Claim
-
-    topic = state.get("research_topic") or ""
-
+    guided_input = state.get("guided_input")
+    topic = state.get("research_topic") or (
+        guided_input.cover_info.title if guided_input else ""
+    )
     ingestion_results = state.get("ingestion_results")
 
     if not ingestion_results:
         print("[Summarization Agent] No ingestion results available.")
-
         return {
             **state,
-            "findings": FindingsPacket(
-                topic=topic,
-                summaries=[],
-                claims=[],
-            ),
+            "findings": FindingsPacket(topic=topic, summaries=[], claims=[]),
         }
 
-    summaries = []
-    all_claims = []
-
-    for result in ingestion_results:
-        metadata = result.metadata
-        paper_id = result.paper_id
-
-        # Use the extracted raw text when available.
-        raw_text = result.raw_text or ""
-
-        # Fallback to joining chunks if raw_text is unavailable.
-        if not raw_text and result.chunks:
-            raw_text = " ".join(
-                chunk.text
-                for chunk in result.chunks
-                if chunk.text
-            )
-
-        if not raw_text:
-            print(
-                f"[Summarization Agent] "
-                f"No text available for {paper_id}"
-            )
-
-            summaries.append(
-                PaperSummary(
-                    paper_id=paper_id,
-                    summary="No text could be extracted from this paper.",
-                    key_findings=[],
-                    extracted_claims=[],
-                )
-            )
-            continue
-
-        # Keep the summary deterministic and lightweight for now.
-        # The first portion provides a concise representation of the
-        # extracted paper text without requiring an external LLM.
-        summary_text = raw_text[:1500].strip()
-
-        if len(raw_text) > 1500:
-            summary_text += "..."
-
-        # Create a small set of source-grounded claims from chunks.
-        paper_claims = []
-
-        for index, chunk in enumerate(result.chunks[:3]):
-            if not chunk.text.strip():
-                continue
-
-            claim = Claim(
-                claim_id=f"{paper_id}:claim:{index}",
-                text=chunk.text[:500].strip(),
-                source_paper_id=paper_id,
-                source_chunk_ids=[chunk.chunk_id],
-                verification_status="pending",
-                revision_attempts=0,
-            )
-
-            paper_claims.append(claim)
-            all_claims.append(claim)
-
-        # Basic key findings from the first few chunks.
-        key_findings = [
-            chunk.text[:300].strip()
-            for chunk in result.chunks[:3]
-            if chunk.text.strip()
-        ]
-
-        summary = PaperSummary(
-            paper_id=paper_id,
-            summary=summary_text,
-            key_findings=key_findings,
-            extracted_claims=paper_claims,
-        )
-
-        summaries.append(summary)
-
-        print(
-            f"[Summarization Agent] "
-            f"Processed: {metadata.title}"
-        )
-
-    findings = FindingsPacket(
-        topic=topic,
-        summaries=summaries,
-        claims=all_claims,
-    )
+    findings = run_summarization(topic, ingestion_results)
 
     print(
-        f"[Summarization Agent] "
-        f"Created {len(summaries)} paper summaries "
-        f"and {len(all_claims)} claims."
+        f"[Summarization Agent] Created {len(findings.summaries)} paper "
+        f"summaries and {len(findings.claims)} claims."
     )
 
-    return {
-        **state,
-        "findings": findings,
-    }
+    return {**state, "findings": findings}
    
 def verification_agent(state: PipelineState) -> PipelineState:
-    """
-    Verify extracted claims against the source chunks from ingestion.
-
-    This is a deterministic, source-grounded verification step.
-    It does not require an external LLM/API.
-    """
-
-    from backend.schemas.schemas import VerificationResult
+    """Run Person B's Verification Agent (RAG-grounding, bounded revise loop)."""
+    from backend.agents.verification.agent import run_verification
 
     findings = state.get("findings")
     ingestion_results = state.get("ingestion_results")
 
-    if findings is None:
-        print("[Verification Agent] No findings available.")
+    if findings is None or not ingestion_results:
+        print("[Verification Agent] No findings/ingestion results available.")
+        return {**state, "verification_results": []}
 
-        return {
-            **state,
-            "verification_results": [],
-        }
+    verification_results, updated_findings = run_verification(findings, ingestion_results)
 
-    if not ingestion_results:
-        print("[Verification Agent] No ingestion results available.")
+    print(f"[Verification Agent] {len(verification_results)} claims verified.")
 
-        return {
-            **state,
-            "verification_results": [],
-        }
-
-    # Build a lookup of chunk_id -> chunk text.
-    chunk_lookup = {}
-
-    for ingestion_result in ingestion_results:
-        for chunk in ingestion_result.chunks:
-            chunk_lookup[chunk.chunk_id] = chunk.text
-
-    verification_results = []
-
-    print(
-        f"[Verification Agent] "
-        f"Verifying {len(findings.claims)} claims."
-    )
-
-    for claim in findings.claims:
-        supporting_chunk_ids = [
-            chunk_id
-            for chunk_id in claim.source_chunk_ids
-            if chunk_id in chunk_lookup
-        ]
-
-        if not supporting_chunk_ids:
-            verification_results.append(
-                VerificationResult(
-                    claim_id=claim.claim_id,
-                    verification_status="unsupported",
-                    confidence_score=0.0,
-                    explanation=(
-                        "No supporting source chunk was found "
-                        "for this claim."
-                    ),
-                    supporting_chunk_ids=[],
-                )
-            )
-            continue
-
-        # Check whether the claim text is represented in its
-        # source chunk. This keeps verification deterministic.
-        claim_text = claim.text.strip().lower()
-
-        supporting_text = " ".join(
-            chunk_lookup[chunk_id]
-            for chunk_id in supporting_chunk_ids
-        ).lower()
-
-        if claim_text and claim_text[:200] in supporting_text:
-            verification_status = "verified"
-            confidence_score = 1.0
-            explanation = (
-                "The claim is directly supported by "
-                "its source chunk."
-            )
-        else:
-            verification_status = "partially_supported"
-            confidence_score = 0.5
-            explanation = (
-                "A supporting source chunk exists, but the "
-                "claim text was not found verbatim in that chunk."
-            )
-
-        verification_results.append(
-            VerificationResult(
-                claim_id=claim.claim_id,
-                verification_status=verification_status,
-                confidence_score=confidence_score,
-                explanation=explanation,
-                supporting_chunk_ids=supporting_chunk_ids,
-            )
-        )
-
-    print(
-        f"[Verification Agent] "
-        f"{len(verification_results)} claims verified."
-    )
-
+    # updated_findings carries revised claim text / revision_attempts /
+    # verification_status back onto the same Claim objects.
     return {
         **state,
         "verification_results": verification_results,
+        "findings": updated_findings,
     }
 
 
