@@ -6,6 +6,7 @@ Answers questions grounded strictly in the ingested research paper chunks.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any, Callable, Optional
 
@@ -21,6 +22,11 @@ AGENT_NAME = "user_qa_agent"
 NOT_ENOUGH_INFO_ANSWER = (
     "The ingested research papers do not contain enough information to answer this question."
 )
+
+
+def _make_qa_cache_key(question: str) -> str:
+    """Generate a filesystem-safe, deterministic cache key from the question."""
+    return f"qa_{hashlib.sha256(question.strip().lower().encode('utf-8')).hexdigest()[:16]}"
 
 
 def _parse_search_results(results: Any) -> list[dict[str, Any]]:
@@ -166,10 +172,12 @@ class UserQAAgent:
             "Answer:"
         )
 
+        cache_key = _make_qa_cache_key(request.question)
+
         try:
             raw_answer = self.client.generate(
                 prompt,
-                paper_id=request.question,
+                paper_id=cache_key,
                 agent_name=AGENT_NAME,
                 purpose="user_qa_answer",
                 use_cache=True,

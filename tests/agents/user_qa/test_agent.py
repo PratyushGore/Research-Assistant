@@ -7,12 +7,14 @@ Covers the four mandatory cases:
 3. The allowed_paper_ids filter dropping chunks outside the set.
 4. LLM failure handling returning a clear error answer without crashing.
 """
-from unittest.mock import patch
+import hashlib
+from unittest.mock import MagicMock, patch
 from typing import Any, Optional
 
 from backend.agents.user_qa.agent import (
     NOT_ENOUGH_INFO_ANSWER,
     UserQAAgent,
+    _make_qa_cache_key,
     run_user_qa,
 )
 from backend.schemas.schemas import UserQARequest, UserQAResponse
@@ -99,7 +101,9 @@ def test_user_qa_normal_answer():
     # Verify GeminiClient was called with proper token/cache arguments
     assert len(client.call_history) == 1
     call = client.call_history[0]
-    assert call["paper_id"] == "What sample size did paper p3 use?"
+    expected_cache_key = f"qa_{hashlib.sha256(request.question.strip().lower().encode('utf-8')).hexdigest()[:16]}"
+    assert call["paper_id"] == expected_cache_key
+    assert call["paper_id"] == _make_qa_cache_key(request.question)
     assert call["agent_name"] == "user_qa_agent"
     assert call["purpose"] == "user_qa_answer"
     assert call["use_cache"] is True
@@ -273,3 +277,54 @@ def test_user_qa_retrieval_exception_handling():
 
     assert resp.answer.startswith("Error retrieving relevant research papers:")
     assert resp.source_paper_ids == []
+
+
+def test_user_qa_caching_with_special_characters(tmp_path, monkeypatch):
+    """
+    Test that questions containing ?, :, and / safely write to disk cache in tmp_path
+    and a second identical call returns the cached answer without calling the client again.
+    """
+    import backend.agents.common.llm_client as llm_module
+    from backend.agents.common.llm_client import GeminiClient
+
+    # Point LLM CACHE_DIR to the pytest temp directory
+    monkeypatch.setattr(llm_module, "CACHE_DIR", tmp_path)
+
+    question_with_special_chars = (
+        "What is the accuracy of model:v1 on 2024/2025 benchmarks? Does it scale?"
+    )
+    request = UserQARequest(
+        question=question_with_special_chars,
+        topic="Model Benchmark Evaluation",
+    )
+
+    # Use a real GeminiClient instance with mocked model generator
+    client = GeminiClient(api_key="mock-key-for-test")
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value.text = "The accuracy of model:v1 is 96.5%."
+    client._ensure_model = MagicMock(return_value=mock_model)
+
+    search_fn = lambda q, top_k=5: sample_retrieval_results()
+
+    # First call: Cache miss -> invokes client and performs real write to tmp_path
+    resp1 = run_user_qa(request=request, client=client, search_fn=search_fn)
+    assert resp1.answer == "The accuracy of model:v1 is 96.5%."
+    assert resp1.source_paper_ids == ["p3", "p1"]
+    assert mock_model.generate_content.call_count == 1
+
+    # Confirm cache file was actually written to tmp_path on disk
+    cache_files = list(tmp_path.glob("*.json"))
+    assert len(cache_files) == 1
+    expected_hash = hashlib.sha256(
+        question_with_special_chars.strip().lower().encode("utf-8")
+    ).hexdigest()[:16]
+    expected_cache_prefix = f"qa_{expected_hash}"
+    assert cache_files[0].name.startswith(expected_cache_prefix)
+
+    # Second identical call: Cache hit -> reads from disk without calling client again
+    resp2 = run_user_qa(request=request, client=client, search_fn=search_fn)
+    assert resp2.answer == "The accuracy of model:v1 is 96.5%."
+    assert resp2.source_paper_ids == ["p3", "p1"]
+    # Model should NOT have been called a second time
+    assert mock_model.generate_content.call_count == 1
+
