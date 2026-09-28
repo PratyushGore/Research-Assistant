@@ -229,7 +229,12 @@ def run_summarization(
         summaries.append(summary)
         all_claims.extend(summary.extracted_claims)
 
-    _cross_paper_synthesis(client, topic, summaries)
+    synthesis = _cross_paper_synthesis(client, topic, summaries)
 
     logger.info("[%s] Created %d paper summaries and %d claims.", AGENT_NAME, len(summaries), len(all_claims))
-    return FindingsPacket(topic=topic, summaries=summaries, claims=all_claims)
+    return FindingsPacket(
+        topic=topic,
+        summaries=summaries,
+        claims=all_claims,
+        cross_paper_synthesis=synthesis,
+    )

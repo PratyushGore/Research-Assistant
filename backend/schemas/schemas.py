@@ -100,6 +100,8 @@ class FindingsPacket(BaseModel):
     topic: str
     summaries: list[PaperSummary] = Field(default_factory=list)
     claims: list[Claim] = Field(default_factory=list)
+    contradictions: list[str] = Field(default_factory=list)
+    cross_paper_synthesis: Optional[str] = None
 
 
 class VerificationResult(BaseModel):

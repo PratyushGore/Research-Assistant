@@ -164,7 +164,8 @@ def summarization_agent(state: PipelineState) -> PipelineState:
     )
 
     return {**state, "findings": findings}
-   
+
+
 def verification_agent(state: PipelineState) -> PipelineState:
     """Run Person B's Verification Agent (RAG-grounding, bounded revise loop)."""
     from backend.agents.verification.agent import run_verification
