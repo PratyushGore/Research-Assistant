@@ -1,9 +1,7 @@
 import operator
 from typing import Annotated, Any, Callable, Optional, TypedDict
 from langgraph.graph import StateGraph, START, END
-from pydantic import BaseModel, Field
 
-import backend.schemas.schemas as _schemas
 from backend.schemas.schemas import (
     GuidedInputBundle,
     SearchResult,
@@ -16,23 +14,9 @@ from backend.schemas.schemas import (
     DocumentReviewResult,
     UserQARequest,
     UserQAResponse,
+    PipelineStatus,
     OutputType,
 )
-
-
-class PipelineStatus(BaseModel):
-    stage: str = "pending"
-    detail: Optional[str] = None
-    progress_pct: Optional[int] = None
-    request_id: Optional[str] = None
-    status: str = "pending"
-    current_agent: Optional[str] = None
-    completed_deliverables: list[ComposerResult] = Field(default_factory=list)
-    error_message: Optional[str] = None
-
-
-_schemas.PipelineStatus = PipelineStatus
-
 
 
 class PipelineState(TypedDict, total=False):
