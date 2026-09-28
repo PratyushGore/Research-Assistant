@@ -141,6 +141,7 @@ class ComposerResult(BaseModel):
     content: str
     sections: dict[str, str] = Field(default_factory=dict)
     citations_used: list[str] = Field(default_factory=list)
+    file_path: Optional[str] = None
 
 
 class DocumentReviewRequest(BaseModel):

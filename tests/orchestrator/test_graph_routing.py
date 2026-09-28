@@ -754,3 +754,104 @@ def test_backward_compatible_pipeline_graph():
     assert len(composer_results) == 1
     assert composer_results[0].output_type == OutputType.LITERATURE_SURVEY
 
+
+# ---------------------------------------------------------------------------
+# 11. Compose Graph File Rendering Tests (Phase 4c-i)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("output_type,expected_ext", [
+    (OutputType.LITERATURE_SURVEY, "docx"),
+    (OutputType.EXECUTIVE_SUMMARY, "docx"),
+    (OutputType.RESEARCH_PAPER, "docx"),
+    (OutputType.PPT, "pptx"),
+])
+def test_compose_graph_renders_real_file_on_disk(output_type, expected_ext):
+    """Confirm a real file exists on disk under backend/generated_outputs/ after compose_graph.invoke."""
+    findings, citations, guided_input = _make_dummy_findings_and_citations()
+    req_id = f"test-render-{output_type.value}"
+
+    state = {
+        "request_id": req_id,
+        "research_topic": "AI Research",
+        "findings": findings,
+        "citations": citations,
+        "guided_input": guided_input,
+        "selected_outputs": [output_type],
+    }
+
+    final_state = compose_graph.invoke(state)
+
+    results = final_state.get("composer_results", [])
+    assert len(results) == 1
+    composer_result = results[0]
+    assert composer_result.output_type == output_type
+    assert composer_result.file_path is not None
+
+    file_path = Path(composer_result.file_path)
+    assert file_path.exists(), f"Expected rendered file to exist at {file_path}"
+    assert file_path.is_file()
+    assert file_path.stat().st_size > 0
+    assert file_path.suffix == f".{expected_ext}"
+    assert "generated_outputs" in file_path.parts
+    assert req_id in file_path.parts
+    assert file_path.name == f"{output_type.value}.{expected_ext}"
+
+
+def test_compose_graph_fan_out_multiple_outputs_renders_all_files():
+    """compose_graph fan-out renders all selected outputs to disk with populated file_path."""
+    findings, citations, guided_input = _make_dummy_findings_and_citations()
+    req_id = "test-render-all-outputs"
+
+    selected = [
+        OutputType.LITERATURE_SURVEY,
+        OutputType.EXECUTIVE_SUMMARY,
+        OutputType.PPT,
+        OutputType.RESEARCH_PAPER,
+    ]
+
+    state = {
+        "request_id": req_id,
+        "research_topic": "AI Research All",
+        "findings": findings,
+        "citations": citations,
+        "guided_input": guided_input,
+        "selected_outputs": selected,
+    }
+
+    final_state = compose_graph.invoke(state)
+
+    results = final_state.get("composer_results", [])
+    assert len(results) == 4
+
+    for r in results:
+        assert r.file_path is not None
+        p = Path(r.file_path)
+        assert p.exists()
+        assert p.stat().st_size > 0
+        if r.output_type == OutputType.PPT:
+            assert p.suffix == ".pptx"
+        else:
+            assert p.suffix == ".docx"
+
+
+def test_render_failure_sets_file_path_none_without_crashing_fan_out():
+    """If rendering fails for an output, log warning and set file_path=None without crashing fan-out."""
+    findings, citations, guided_input = _make_dummy_findings_and_citations()
+
+    state = {
+        "request_id": "test-render-failure",
+        "research_topic": "Failure Resilience",
+        "findings": findings,
+        "citations": citations,
+        "guided_input": guided_input,
+        "selected_outputs": [OutputType.PPT, OutputType.LITERATURE_SURVEY],
+    }
+
+    with patch("backend.agents.output_renderer.renderer.render_output", side_effect=RuntimeError("Disk I/O error")):
+        final_state = compose_graph.invoke(state)
+
+    results = final_state.get("composer_results", [])
+    assert len(results) == 2
+    for r in results:
+        assert r.file_path is None
+

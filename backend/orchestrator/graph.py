@@ -408,6 +408,42 @@ def _run_composer(
 
     print(f"[Composer Agent] Created output: {result.title}")
 
+    # Render output file
+    import logging
+    from pathlib import Path
+    from backend.agents.output_renderer.renderer import render_output
+
+    logger = logging.getLogger(__name__)
+
+    default_formats: dict[OutputType, str] = {
+        OutputType.LITERATURE_SURVEY: "docx",
+        OutputType.EXECUTIVE_SUMMARY: "docx",
+        OutputType.RESEARCH_PAPER: "docx",
+        OutputType.PPT: "pptx",
+    }
+    output_format = default_formats.get(output_type, "docx")
+    ext = output_format
+
+    request_id = state.get("request_id") or "default"
+    generated_dir = Path(__file__).resolve().parent.parent / "generated_outputs" / str(request_id)
+
+    try:
+        generated_dir.mkdir(parents=True, exist_ok=True)
+        output_file_path = generated_dir / f"{output_type.value}.{ext}"
+        rendered_path = render_output(
+            composer_result=result,
+            output_format=output_format,
+            output_path=output_file_path,
+        )
+        result.file_path = str(rendered_path)
+        print(f"[Composer Agent] Rendered {output_type.value} to {rendered_path}")
+    except Exception as exc:
+        logger.warning(
+            f"[Composer Agent] Failed to render output for {output_type.value}: {exc}",
+            exc_info=True,
+        )
+        result.file_path = None
+
     return {"composer_results": [result]}
 
 
