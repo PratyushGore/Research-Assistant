@@ -1,4 +1,5 @@
-from typing import Optional, TypedDict
+import operator
+from typing import Annotated, Any, Callable, Optional, TypedDict
 from langgraph.graph import StateGraph, START, END
 
 from backend.schemas.schemas import (
@@ -37,7 +38,7 @@ class PipelineState(TypedDict, total=False):
 
     citations: Optional[CitationResult]
 
-    composer_results: list[ComposerResult]
+    composer_results: Annotated[list[ComposerResult], operator.add]
 
     document_review_result: Optional[DocumentReviewResult]
 
@@ -48,15 +49,19 @@ class PipelineState(TypedDict, total=False):
     pipeline_status: Optional[PipelineStatus]
 
     output_type: Optional[OutputType]
+
+    selected_outputs: list[OutputType]
+
+
 # ---------------------------------------------------------------------------
-# Agent Node Stubs
-# Teammates should replace the body of these functions with their real logic.
-# Signature to match: def agent_name(state: PipelineState) -> PipelineState
+# Agent Node Functions
 # ---------------------------------------------------------------------------
 
-def guided_input_agent(state: PipelineState) -> PipelineState:
-    print("[STUB] guided_input_agent called")
-    return state
+def guided_input_agent(state: PipelineState) -> dict[str, Any]:
+    """Pass-through node that checks for guided_input and changes nothing."""
+    if not state.get("guided_input"):
+        print("[Guided Input Agent] Warning: guided_input is missing from state.")
+    return {}
 
 
 def search_agent(state: PipelineState) -> PipelineState:
@@ -306,22 +311,30 @@ def citation_agent(state: PipelineState) -> PipelineState:
     }
 
 
-def composer_agent(state: PipelineState) -> PipelineState:
-    """Run the Composer Agent using the verified research findings."""
-
+def _run_composer(
+    state: PipelineState,
+    output_type: OutputType | str,
+) -> dict[str, list[ComposerResult]]:
+    """
+    Shared helper for composer nodes.
+    Reuses existing Composer logic and returns only the composer_results delta.
+    """
     from backend.agents.composer.agent import composer_agent as composer
+
+    if isinstance(output_type, str):
+        output_type = OutputType(output_type)
 
     findings = state.get("findings")
     citation_result = state.get("citations")
     guided_input = state.get("guided_input")
 
     if findings is None:
-        print("[Composer Agent] No findings available.")
-        return state
+        print(f"[Composer Agent] No findings available for {output_type.value}.")
+        return {"composer_results": []}
 
     if citation_result is None:
-        print("[Composer Agent] No citation results available.")
-        return state
+        print(f"[Composer Agent] No citation results available for {output_type.value}.")
+        return {"composer_results": []}
 
     # Create a default GuidedInputBundle if the guided-input
     # agent has not populated one yet.
@@ -343,15 +356,7 @@ def composer_agent(state: PipelineState) -> PipelineState:
             )
         )
 
-    output_type = state.get(
-        "output_type",
-        OutputType.LITERATURE_SURVEY,
-    )
-
-    print(
-        f"[Composer Agent] Creating "
-        f"{output_type.value}..."
-    )
+    print(f"[Composer Agent] Creating {output_type.value}...")
 
     result = composer.compose(
         output_type=output_type,
@@ -360,16 +365,66 @@ def composer_agent(state: PipelineState) -> PipelineState:
         citation_result=citation_result,
     )
 
-    print(
-        f"[Composer Agent] Created output: "
-        f"{result.title}"
-    )
+    print(f"[Composer Agent] Created output: {result.title}")
 
-    return {
-        **state,
-        "guided_input": guided_input,
-        "composer_results": [result],
-    }
+    return {"composer_results": [result]}
+
+
+def composer_literature_survey(state: PipelineState) -> dict[str, list[ComposerResult]]:
+    return _run_composer(state, OutputType.LITERATURE_SURVEY)
+
+
+def composer_executive_summary(state: PipelineState) -> dict[str, list[ComposerResult]]:
+    return _run_composer(state, OutputType.EXECUTIVE_SUMMARY)
+
+
+def composer_ppt(state: PipelineState) -> dict[str, list[ComposerResult]]:
+    return _run_composer(state, OutputType.PPT)
+
+
+def composer_research_paper(state: PipelineState) -> dict[str, list[ComposerResult]]:
+    return _run_composer(state, OutputType.RESEARCH_PAPER)
+
+
+def composer_agent(state: PipelineState) -> dict[str, list[ComposerResult]]:
+    output_type = state.get("output_type") or OutputType.LITERATURE_SURVEY
+    return _run_composer(state, output_type)
+
+
+COMPOSER_NODES: dict[OutputType, str] = {
+    OutputType.LITERATURE_SURVEY: "composer_literature_survey",
+    OutputType.EXECUTIVE_SUMMARY: "composer_executive_summary",
+    OutputType.PPT: "composer_ppt",
+    OutputType.RESEARCH_PAPER: "composer_research_paper",
+}
+
+
+def route_to_composers(state: PipelineState) -> list[str]:
+    """
+    Pure routing function that determines which composer nodes to execute.
+    Returns node names deduplicated and in order.
+    Falls back to [output_type or OutputType.LITERATURE_SURVEY] if selected_outputs is missing/empty.
+    """
+    selected = state.get("selected_outputs")
+    if not selected:
+        fallback = state.get("output_type") or OutputType.LITERATURE_SURVEY
+        selected = [fallback]
+
+    node_names: list[str] = []
+    seen: set[str] = set()
+
+    for item in selected:
+        try:
+            norm_type = item if isinstance(item, OutputType) else OutputType(item)
+        except (ValueError, TypeError):
+            continue
+
+        node_name = COMPOSER_NODES.get(norm_type)
+        if node_name and node_name not in seen:
+            seen.add(node_name)
+            node_names.append(node_name)
+
+    return node_names
 
 
 def document_review_agent(state: PipelineState) -> PipelineState:
@@ -385,36 +440,87 @@ def user_qa_agent(state: PipelineState) -> PipelineState:
 # ---------------------------------------------------------------------------
 # Main Pipeline Graph Construction
 # Linear Flow: guided_input -> search -> ingestion -> summarization ->
-#              verification -> citation -> composer
+#              verification -> citation -> parallel composers (conditional) -> END
 # ---------------------------------------------------------------------------
 
-builder = StateGraph(PipelineState)
+def build_pipeline_graph(
+    node_overrides: Optional[dict[str, Callable]] = None,
+):
+    """
+    Build and compile the main pipeline graph.
+    Accepts node_overrides so tests can inject fake nodes.
+    """
+    overrides = node_overrides or {}
 
-# Register agent nodes
-builder.add_node("guided_input", guided_input_agent)
-builder.add_node("search", search_agent)
-builder.add_node("ingestion", ingestion_agent)
-builder.add_node("summarization", summarization_agent)
-builder.add_node("verification", verification_agent)
-builder.add_node("citation", citation_agent)
-builder.add_node("composer", composer_agent)
-builder.add_node("document_review", document_review_agent)
+    builder = StateGraph(PipelineState)
 
-# Wire the primary linear pipeline
-builder.add_edge(START, "guided_input")
-builder.add_edge("guided_input", "search")
-builder.add_edge("search", "ingestion")
-builder.add_edge("ingestion", "summarization")
-builder.add_edge("summarization", "verification")
-builder.add_edge("verification", "citation")
-builder.add_edge("citation", "composer")
-builder.add_edge("composer", END)
+    # Register linear agent nodes
+    builder.add_node("guided_input", overrides.get("guided_input", guided_input_agent))
+    builder.add_node("search", overrides.get("search", search_agent))
+    builder.add_node("ingestion", overrides.get("ingestion", ingestion_agent))
+    builder.add_node("summarization", overrides.get("summarization", summarization_agent))
+    builder.add_node("verification", overrides.get("verification", verification_agent))
+    builder.add_node("citation", overrides.get("citation", citation_agent))
 
-# Document review terminal edge in main graph structure
-builder.add_edge("document_review", END)
+    # Register parallel composer nodes
+    builder.add_node(
+        "composer_literature_survey",
+        overrides.get("composer_literature_survey", composer_literature_survey),
+    )
+    builder.add_node(
+        "composer_executive_summary",
+        overrides.get("composer_executive_summary", composer_executive_summary),
+    )
+    builder.add_node(
+        "composer_ppt",
+        overrides.get("composer_ppt", composer_ppt),
+    )
+    builder.add_node(
+        "composer_research_paper",
+        overrides.get("composer_research_paper", composer_research_paper),
+    )
+
+    # Document review stub (unwired to pipeline, terminal edge to END)
+    builder.add_node(
+        "document_review",
+        overrides.get("document_review", document_review_agent),
+    )
+
+    # Wire the primary linear pipeline up to citation
+    builder.add_edge(START, "guided_input")
+    builder.add_edge("guided_input", "search")
+    builder.add_edge("search", "ingestion")
+    builder.add_edge("ingestion", "summarization")
+    builder.add_edge("summarization", "verification")
+    builder.add_edge("verification", "citation")
+
+    # Conditional fan-out from citation to selected composer nodes
+    composer_node_names = [
+        "composer_literature_survey",
+        "composer_executive_summary",
+        "composer_ppt",
+        "composer_research_paper",
+    ]
+    builder.add_conditional_edges(
+        "citation",
+        route_to_composers,
+        composer_node_names,
+    )
+
+    # Every composer node then goes to END
+    builder.add_edge("composer_literature_survey", END)
+    builder.add_edge("composer_executive_summary", END)
+    builder.add_edge("composer_ppt", END)
+    builder.add_edge("composer_research_paper", END)
+
+    # Document review terminal edge in main graph structure
+    builder.add_edge("document_review", END)
+
+    return builder.compile()
+
 
 # Compiled main pipeline executable
-graph = builder.compile()
+graph = build_pipeline_graph()
 
 
 # ---------------------------------------------------------------------------
