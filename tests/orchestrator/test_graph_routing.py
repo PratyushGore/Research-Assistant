@@ -3,6 +3,7 @@ Unit tests for multi-output parallel composer graph routing and fan-out.
 """
 
 from pathlib import Path
+from unittest.mock import patch
 import pytest
 
 from backend.agents.output_renderer.renderer import render_output
@@ -16,8 +17,12 @@ from backend.orchestrator.graph import (
     composer_research_paper,
     graph,
     guided_input_agent,
+    ingestion_agent,
     qa_graph,
     route_to_composers,
+    search_agent,
+    should_continue_after_ingestion,
+    should_continue_after_search,
 )
 from backend.schemas.schemas import (
     AcademicContentInfo,
@@ -28,9 +33,13 @@ from backend.schemas.schemas import (
     FindingsPacket,
     FormattedCitation,
     GuidedInputBundle,
+    IngestionResult,
     OutputType,
+    PaperMetadata,
     PaperSummary,
+    PipelineStatus,
     ProjectPresentationInfo,
+    SearchResult,
 )
 
 
@@ -377,3 +386,313 @@ def test_parallel_output_render_paths_dont_collide(tmp_path: Path):
 
     assert rendered_paper.exists()
     assert rendered_paper.stat().st_size > 0
+
+
+# ---------------------------------------------------------------------------
+# 6. Failure Router Unit Tests
+# ---------------------------------------------------------------------------
+
+def test_should_continue_after_search_router():
+    """should_continue_after_search returns 'stop' when failed, else 'continue'."""
+    # Failed status returns 'stop'
+    failed_state = {
+        "pipeline_status": PipelineStatus(
+            stage="failed",
+            detail="No papers found for this topic.",
+        )
+    }
+    assert should_continue_after_search(failed_state) == "stop"
+
+    # Dict format support
+    dict_failed = {"pipeline_status": {"stage": "failed", "detail": "error"}}
+    assert should_continue_after_search(dict_failed) == "stop"
+
+    # Missing status returns 'continue'
+    assert should_continue_after_search({}) == "continue"
+
+    # Non-failed status returns 'continue'
+    non_failed = {"pipeline_status": PipelineStatus(stage="in_progress")}
+    assert should_continue_after_search(non_failed) == "continue"
+
+
+def test_should_continue_after_ingestion_router():
+    """should_continue_after_ingestion returns 'stop' when failed, else 'continue'."""
+    # Failed status returns 'stop'
+    failed_state = {
+        "pipeline_status": PipelineStatus(
+            stage="failed",
+            detail="All papers failed during ingestion.",
+        )
+    }
+    assert should_continue_after_ingestion(failed_state) == "stop"
+
+    # Dict format support
+    dict_failed = {"pipeline_status": {"stage": "failed"}}
+    assert should_continue_after_ingestion(dict_failed) == "stop"
+
+    # Missing status returns 'continue'
+    assert should_continue_after_ingestion({}) == "continue"
+
+    # Non-failed status returns 'continue'
+    non_failed = {"pipeline_status": PipelineStatus(stage="in_progress")}
+    assert should_continue_after_ingestion(non_failed) == "continue"
+
+
+# ---------------------------------------------------------------------------
+# 7. Search and Ingestion Node Failure Logic Tests
+# ---------------------------------------------------------------------------
+
+def test_search_agent_zero_results_sets_failure_status():
+    """search_agent sets pipeline_status stage='failed' when search returns 0 papers."""
+    empty_result = SearchResult(query="obscure topic", papers=[], total_results=0)
+
+    with patch("backend.agents.search.agent.search_papers", return_value=empty_result):
+        state = {"research_topic": "obscure topic"}
+        new_state = search_agent(state)
+
+    status = new_state.get("pipeline_status")
+    assert status is not None
+    assert status.stage == "failed"
+    assert status.detail == "No papers found for this topic."
+
+
+def test_ingestion_agent_empty_search_results_sets_failure_status():
+    """ingestion_agent sets pipeline_status with 'No papers to ingest.' when papers list is empty."""
+    empty_search = SearchResult(query="topic", papers=[], total_results=0)
+    state = {"search_results": empty_search}
+
+    new_state = ingestion_agent(state)
+
+    status = new_state.get("pipeline_status")
+    assert status is not None
+    assert status.stage == "failed"
+    assert status.detail == "No papers to ingest."
+    assert new_state.get("ingestion_results") == []
+
+
+def test_ingestion_agent_all_papers_fail_sets_distinct_detail():
+    """ingestion_agent distinguishes 'All papers failed during ingestion.' when papers exist but fail."""
+    paper = PaperMetadata(
+        paper_id="paper_fail_1",
+        title="Failing Paper",
+        url="http://example.com/fail.pdf",
+    )
+    search_with_paper = SearchResult(query="topic", papers=[paper], total_results=1)
+
+    # Ingestion failure returns an IngestionResult with empty chunks and raw_text None
+    failed_ingest = IngestionResult(
+        paper_id="paper_fail_1",
+        metadata=paper,
+        chunks=[],
+        raw_text=None,
+    )
+
+    with patch(
+        "backend.agents.ingestion.agent.ingest_and_store_pdf",
+        return_value=failed_ingest,
+    ):
+        state = {"search_results": search_with_paper}
+        new_state = ingestion_agent(state)
+
+    status = new_state.get("pipeline_status")
+    assert status is not None
+    assert status.stage == "failed"
+    assert status.detail == "All papers failed during ingestion."
+    assert new_state.get("ingestion_results") == []
+
+
+# ---------------------------------------------------------------------------
+# 8. Graph Execution Failure Routing Tests (Using node_overrides)
+# ---------------------------------------------------------------------------
+
+def test_graph_zero_search_results_stops_before_ingestion():
+    """
+    A topic that returns zero search results reaches END with pipeline_status.stage == 'failed'
+    and never calls ingestion, summarization, or composer.
+    """
+    calls = {"ingestion": 0, "summarization": 0, "composer": 0}
+
+    def spy_ingestion(state):
+        calls["ingestion"] += 1
+        return {}
+
+    def spy_summarization(state):
+        calls["summarization"] += 1
+        return {}
+
+    def spy_composer(state):
+        calls["composer"] += 1
+        return {"composer_results": []}
+
+    fake_overrides = {
+        "guided_input": lambda state: {},
+        "search": lambda state: {
+            "search_results": SearchResult(query="empty topic", papers=[], total_results=0),
+            "pipeline_status": PipelineStatus(
+                stage="failed",
+                detail="No papers found for this topic.",
+            ),
+        },
+        "ingestion": spy_ingestion,
+        "summarization": spy_summarization,
+        "composer_literature_survey": spy_composer,
+    }
+
+    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+
+    initial_state = {
+        "request_id": "req-zero-search",
+        "research_topic": "empty topic",
+        "selected_outputs": [OutputType.LITERATURE_SURVEY],
+    }
+
+    final_state = pipeline.invoke(initial_state)
+
+    # Pipeline stopped at END after search router
+    assert final_state.get("pipeline_status") is not None
+    assert final_state["pipeline_status"].stage == "failed"
+    assert final_state["pipeline_status"].detail == "No papers found for this topic."
+
+    # Downstream nodes were NEVER called
+    assert calls["ingestion"] == 0
+    assert calls["summarization"] == 0
+    assert calls["composer"] == 0
+    assert final_state.get("composer_results", []) == []
+
+
+def test_graph_all_ingestion_failing_stops_before_summarization():
+    """
+    A topic where search finds papers but every PDF download fails reaches END
+    at the ingestion failure point with a distinct detail message and never calls summarization or composer.
+    """
+    calls = {"summarization": 0, "verification": 0, "composer": 0}
+
+    def spy_summarization(state):
+        calls["summarization"] += 1
+        return {}
+
+    def spy_verification(state):
+        calls["verification"] += 1
+        return {}
+
+    def spy_composer(state):
+        calls["composer"] += 1
+        return {"composer_results": []}
+
+    paper = PaperMetadata(
+        paper_id="paper_1",
+        title="Found Paper",
+        url="http://example.com/paper.pdf",
+    )
+
+    fake_overrides = {
+        "guided_input": lambda state: {},
+        "search": lambda state: {
+            "search_results": SearchResult(query="topic", papers=[paper], total_results=1),
+        },
+        "ingestion": lambda state: {
+            "ingestion_results": [],
+            "pipeline_status": PipelineStatus(
+                stage="failed",
+                detail="All papers failed during ingestion.",
+            ),
+        },
+        "summarization": spy_summarization,
+        "verification": spy_verification,
+        "composer_literature_survey": spy_composer,
+    }
+
+    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+
+    initial_state = {
+        "request_id": "req-ingestion-fail",
+        "research_topic": "topic",
+        "selected_outputs": [OutputType.LITERATURE_SURVEY],
+    }
+
+    final_state = pipeline.invoke(initial_state)
+
+    # Pipeline stopped at END after ingestion router
+    assert final_state.get("pipeline_status") is not None
+    assert final_state["pipeline_status"].stage == "failed"
+    assert final_state["pipeline_status"].detail == "All papers failed during ingestion."
+
+    # Downstream nodes were NEVER called
+    assert calls["summarization"] == 0
+    assert calls["verification"] == 0
+    assert calls["composer"] == 0
+    assert final_state.get("composer_results", []) == []
+
+
+def test_graph_normal_success_path_reaches_composer_node():
+    """
+    Normal success path with papers found and ingested continues through all stages
+    and reaches composer nodes.
+    """
+    findings, citations, guided_input = _make_dummy_findings_and_citations()
+    paper = PaperMetadata(paper_id="paper_1", title="RAG Architectures")
+
+    calls = {"ingestion": 0, "summarization": 0, "verification": 0, "citation": 0}
+
+    def spy_ingestion(state):
+        calls["ingestion"] += 1
+        return {
+            "ingestion_results": [
+                IngestionResult(
+                    paper_id="paper_1",
+                    metadata=paper,
+                    chunks=[],
+                )
+            ]
+        }
+
+    def spy_summarization(state):
+        calls["summarization"] += 1
+        return {"findings": findings}
+
+    def spy_verification(state):
+        calls["verification"] += 1
+        return {}
+
+    def spy_citation(state):
+        calls["citation"] += 1
+        return {"citations": citations}
+
+    fake_overrides = {
+        "guided_input": lambda state: {},
+        "search": lambda state: {
+            "search_results": SearchResult(query="RAG", papers=[paper], total_results=1),
+        },
+        "ingestion": spy_ingestion,
+        "summarization": spy_summarization,
+        "verification": spy_verification,
+        "citation": spy_citation,
+    }
+
+    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+
+    initial_state = {
+        "request_id": "req-success-path",
+        "research_topic": "RAG",
+        "guided_input": guided_input,
+        "selected_outputs": [OutputType.LITERATURE_SURVEY],
+    }
+
+    final_state = pipeline.invoke(initial_state)
+
+    # All linear nodes were executed in sequence
+    assert calls["ingestion"] == 1
+    assert calls["summarization"] == 1
+    assert calls["verification"] == 1
+    assert calls["citation"] == 1
+
+    # Composer output was generated
+    composer_results = final_state.get("composer_results", [])
+    assert len(composer_results) == 1
+    assert composer_results[0].output_type == OutputType.LITERATURE_SURVEY
+
+    # pipeline_status was not set to failed
+    status = final_state.get("pipeline_status")
+    if status is not None:
+        assert getattr(status, "stage", None) != "failed"
+

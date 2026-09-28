@@ -1,7 +1,9 @@
 import operator
 from typing import Annotated, Any, Callable, Optional, TypedDict
 from langgraph.graph import StateGraph, START, END
+from pydantic import BaseModel, Field
 
+import backend.schemas.schemas as _schemas
 from backend.schemas.schemas import (
     GuidedInputBundle,
     SearchResult,
@@ -14,9 +16,23 @@ from backend.schemas.schemas import (
     DocumentReviewResult,
     UserQARequest,
     UserQAResponse,
-    PipelineStatus,
     OutputType,
 )
+
+
+class PipelineStatus(BaseModel):
+    stage: str = "pending"
+    detail: Optional[str] = None
+    progress_pct: Optional[int] = None
+    request_id: Optional[str] = None
+    status: str = "pending"
+    current_agent: Optional[str] = None
+    completed_deliverables: list[ComposerResult] = Field(default_factory=list)
+    error_message: Optional[str] = None
+
+
+_schemas.PipelineStatus = PipelineStatus
+
 
 
 class PipelineState(TypedDict, total=False):
@@ -86,6 +102,16 @@ def search_agent(state: PipelineState) -> PipelineState:
         f"[Search Agent] Found {search_result.total_results} papers."
     )
 
+    if not search_result.papers:
+        return {
+            **state,
+            "search_results": search_result,
+            "pipeline_status": PipelineStatus(
+                stage="failed",
+                detail="No papers found for this topic.",
+            ),
+        }
+
     return {
         **state,
         "search_results": search_result,
@@ -101,13 +127,24 @@ def ingestion_agent(state: PipelineState) -> PipelineState:
 
     if search_results is None:
         print("[Ingestion Agent] No search results available.")
-        return state
+        return {
+            **state,
+            "ingestion_results": [],
+            "pipeline_status": PipelineStatus(
+                stage="failed",
+                detail="No papers to ingest.",
+            ),
+        }
 
     if not search_results.papers:
         print("[Ingestion Agent] No papers to ingest.")
         return {
             **state,
             "ingestion_results": [],
+            "pipeline_status": PipelineStatus(
+                stage="failed",
+                detail="No papers to ingest.",
+            ),
         }
 
     ingestion_results = []
@@ -125,17 +162,37 @@ def ingestion_agent(state: PipelineState) -> PipelineState:
             f"{paper.title}"
         )
 
-        result = ingest_and_store_pdf(
-            url=paper.url,
-            metadata=paper,
-        )
+        try:
+            result = ingest_and_store_pdf(
+                url=paper.url,
+                metadata=paper,
+            )
 
-        ingestion_results.append(result)
+            if result and (result.chunks or result.raw_text):
+                ingestion_results.append(result)
+            else:
+                print(
+                    f"[Ingestion Agent] Ingestion yielded no content for: {paper.title}"
+                )
+        except Exception as exc:
+            print(
+                f"[Ingestion Agent] Failed to ingest {paper.paper_id}: {exc}"
+            )
 
     print(
         f"[Ingestion Agent] "
         f"{len(ingestion_results)} papers processed."
     )
+
+    if not ingestion_results:
+        return {
+            **state,
+            "ingestion_results": [],
+            "pipeline_status": PipelineStatus(
+                stage="failed",
+                detail="All papers failed during ingestion.",
+            ),
+        }
 
     return {
         **state,
@@ -399,6 +456,36 @@ COMPOSER_NODES: dict[OutputType, str] = {
 }
 
 
+def should_continue_after_search(state: PipelineState) -> str:
+    """
+    Router determining whether to continue after search.
+    Returns 'stop' if pipeline_status with stage == 'failed' is set, else 'continue'.
+    """
+    status = state.get("pipeline_status")
+    if status is not None:
+        stage = getattr(status, "stage", None)
+        if stage is None and isinstance(status, dict):
+            stage = status.get("stage")
+        if stage == "failed":
+            return "stop"
+    return "continue"
+
+
+def should_continue_after_ingestion(state: PipelineState) -> str:
+    """
+    Router determining whether to continue after ingestion.
+    Returns 'stop' if pipeline_status with stage == 'failed' is set, else 'continue'.
+    """
+    status = state.get("pipeline_status")
+    if status is not None:
+        stage = getattr(status, "stage", None)
+        if stage is None and isinstance(status, dict):
+            stage = status.get("stage")
+        if stage == "failed":
+            return "stop"
+    return "continue"
+
+
 def route_to_composers(state: PipelineState) -> list[str]:
     """
     Pure routing function that determines which composer nodes to execute.
@@ -486,11 +573,25 @@ def build_pipeline_graph(
         overrides.get("document_review", document_review_agent),
     )
 
-    # Wire the primary linear pipeline up to citation
+    # Wire the primary linear pipeline up to citation with conditional failure routing
     builder.add_edge(START, "guided_input")
     builder.add_edge("guided_input", "search")
-    builder.add_edge("search", "ingestion")
-    builder.add_edge("ingestion", "summarization")
+    builder.add_conditional_edges(
+        "search",
+        should_continue_after_search,
+        {
+            "continue": "ingestion",
+            "stop": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "ingestion",
+        should_continue_after_ingestion,
+        {
+            "continue": "summarization",
+            "stop": END,
+        },
+    )
     builder.add_edge("summarization", "verification")
     builder.add_edge("verification", "citation")
 
