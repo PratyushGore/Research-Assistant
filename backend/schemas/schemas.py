@@ -175,7 +175,10 @@ class PipelineRequest(BaseModel):
 
 
 class PipelineStatus(BaseModel):
-    request_id: str
+    request_id: Optional[str] = None
+    stage: str = "pending"
+    detail: Optional[str] = None
+    progress_pct: Optional[int] = None
     status: str = "pending"
     current_agent: Optional[str] = None
     completed_deliverables: list[ComposerResult] = Field(default_factory=list)
