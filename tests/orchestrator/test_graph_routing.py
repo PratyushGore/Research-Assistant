@@ -9,7 +9,10 @@ import pytest
 from backend.agents.output_renderer.renderer import render_output
 from backend.orchestrator.graph import (
     _run_composer,
+    build_compose_graph,
     build_pipeline_graph,
+    build_research_graph,
+    compose_graph,
     composer_agent,
     composer_executive_summary,
     composer_literature_survey,
@@ -19,6 +22,7 @@ from backend.orchestrator.graph import (
     guided_input_agent,
     ingestion_agent,
     qa_graph,
+    research_graph,
     route_to_composers,
     search_agent,
     should_continue_after_ingestion,
@@ -275,28 +279,20 @@ def test_guided_input_agent_passthrough(capsys):
 
 
 # ---------------------------------------------------------------------------
-# 4. Pipeline Fan-Out Execution Tests (Using node_overrides)
+# 4. Compose Graph Fan-Out Execution Tests
 # ---------------------------------------------------------------------------
 
-def test_pipeline_fan_out_multiple_outputs():
-    """Graph executes parallel composer nodes and reduces composer_results."""
+def test_compose_graph_fan_out_multiple_outputs():
+    """compose_graph executes parallel composer nodes from pre-populated findings and citations."""
     findings, citations, guided_input = _make_dummy_findings_and_citations()
 
-    # Create fake upstream nodes to avoid network / LLM calls
-    fake_overrides = {
-        "guided_input": lambda state: {},
-        "search": lambda state: {},
-        "ingestion": lambda state: {},
-        "summarization": lambda state: {"findings": findings},
-        "verification": lambda state: {},
-        "citation": lambda state: {"citations": citations},
-    }
-
-    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+    pipeline = build_compose_graph()
 
     initial_state = {
         "request_id": "test-req-multi",
         "research_topic": "RAG Systems",
+        "findings": findings,
+        "citations": citations,
         "guided_input": guided_input,
         "selected_outputs": [OutputType.PPT, OutputType.RESEARCH_PAPER],
     }
@@ -310,24 +306,17 @@ def test_pipeline_fan_out_multiple_outputs():
     assert output_types_present == {OutputType.PPT, OutputType.RESEARCH_PAPER}
 
 
-def test_pipeline_fan_out_single_output():
-    """Graph with single selected output produces exactly one composer result."""
+def test_compose_graph_fan_out_single_output():
+    """compose_graph with single selected output produces exactly one composer result."""
     findings, citations, guided_input = _make_dummy_findings_and_citations()
 
-    fake_overrides = {
-        "guided_input": lambda state: {},
-        "search": lambda state: {},
-        "ingestion": lambda state: {},
-        "summarization": lambda state: {"findings": findings},
-        "verification": lambda state: {},
-        "citation": lambda state: {"citations": citations},
-    }
-
-    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+    pipeline = build_compose_graph()
 
     initial_state = {
         "request_id": "test-req-single",
         "research_topic": "RAG Systems",
+        "findings": findings,
+        "citations": citations,
         "guided_input": guided_input,
         "selected_outputs": [OutputType.LITERATURE_SURVEY],
     }
@@ -340,11 +329,15 @@ def test_pipeline_fan_out_single_output():
 
 
 def test_compiled_graph_and_qa_graph_module_exports():
-    """Ensure module-level graph and qa_graph exports are compiled LangGraph instances."""
+    """Ensure module-level graph, qa_graph, research_graph, and compose_graph exports are compiled LangGraph instances."""
     assert graph is not None
     assert qa_graph is not None
+    assert research_graph is not None
+    assert compose_graph is not None
     assert hasattr(graph, "invoke")
     assert hasattr(qa_graph, "invoke")
+    assert hasattr(research_graph, "invoke")
+    assert hasattr(compose_graph, "invoke")
 
 
 # ---------------------------------------------------------------------------
@@ -508,9 +501,9 @@ def test_ingestion_agent_all_papers_fail_sets_distinct_detail():
 def test_graph_zero_search_results_stops_before_ingestion():
     """
     A topic that returns zero search results reaches END with pipeline_status.stage == 'failed'
-    and never calls ingestion, summarization, or composer.
+    and never calls ingestion or summarization in research_graph.
     """
-    calls = {"ingestion": 0, "summarization": 0, "composer": 0}
+    calls = {"ingestion": 0, "summarization": 0}
 
     def spy_ingestion(state):
         calls["ingestion"] += 1
@@ -520,12 +513,7 @@ def test_graph_zero_search_results_stops_before_ingestion():
         calls["summarization"] += 1
         return {}
 
-    def spy_composer(state):
-        calls["composer"] += 1
-        return {"composer_results": []}
-
     fake_overrides = {
-        "guided_input": lambda state: {},
         "search": lambda state: {
             "search_results": SearchResult(query="empty topic", papers=[], total_results=0),
             "pipeline_status": PipelineStatus(
@@ -535,15 +523,13 @@ def test_graph_zero_search_results_stops_before_ingestion():
         },
         "ingestion": spy_ingestion,
         "summarization": spy_summarization,
-        "composer_literature_survey": spy_composer,
     }
 
-    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+    pipeline = build_research_graph(node_overrides=fake_overrides)
 
     initial_state = {
         "request_id": "req-zero-search",
         "research_topic": "empty topic",
-        "selected_outputs": [OutputType.LITERATURE_SURVEY],
     }
 
     final_state = pipeline.invoke(initial_state)
@@ -556,16 +542,15 @@ def test_graph_zero_search_results_stops_before_ingestion():
     # Downstream nodes were NEVER called
     assert calls["ingestion"] == 0
     assert calls["summarization"] == 0
-    assert calls["composer"] == 0
     assert final_state.get("composer_results", []) == []
 
 
 def test_graph_all_ingestion_failing_stops_before_summarization():
     """
     A topic where search finds papers but every PDF download fails reaches END
-    at the ingestion failure point with a distinct detail message and never calls summarization or composer.
+    at the ingestion failure point with a distinct detail message and never calls summarization.
     """
-    calls = {"summarization": 0, "verification": 0, "composer": 0}
+    calls = {"summarization": 0, "verification": 0}
 
     def spy_summarization(state):
         calls["summarization"] += 1
@@ -575,10 +560,6 @@ def test_graph_all_ingestion_failing_stops_before_summarization():
         calls["verification"] += 1
         return {}
 
-    def spy_composer(state):
-        calls["composer"] += 1
-        return {"composer_results": []}
-
     paper = PaperMetadata(
         paper_id="paper_1",
         title="Found Paper",
@@ -586,7 +567,6 @@ def test_graph_all_ingestion_failing_stops_before_summarization():
     )
 
     fake_overrides = {
-        "guided_input": lambda state: {},
         "search": lambda state: {
             "search_results": SearchResult(query="topic", papers=[paper], total_results=1),
         },
@@ -599,15 +579,13 @@ def test_graph_all_ingestion_failing_stops_before_summarization():
         },
         "summarization": spy_summarization,
         "verification": spy_verification,
-        "composer_literature_survey": spy_composer,
     }
 
-    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+    pipeline = build_research_graph(node_overrides=fake_overrides)
 
     initial_state = {
         "request_id": "req-ingestion-fail",
         "research_topic": "topic",
-        "selected_outputs": [OutputType.LITERATURE_SURVEY],
     }
 
     final_state = pipeline.invoke(initial_state)
@@ -620,16 +598,15 @@ def test_graph_all_ingestion_failing_stops_before_summarization():
     # Downstream nodes were NEVER called
     assert calls["summarization"] == 0
     assert calls["verification"] == 0
-    assert calls["composer"] == 0
     assert final_state.get("composer_results", []) == []
 
 
-def test_graph_normal_success_path_reaches_composer_node():
+def test_research_graph_normal_success_path():
     """
-    Normal success path with papers found and ingested continues through all stages
-    and reaches composer nodes.
+    Normal success path in research_graph runs through search -> ingestion -> summarization ->
+    verification -> citation -> END, populating findings and citations without touching composer.
     """
-    findings, citations, guided_input = _make_dummy_findings_and_citations()
+    findings, citations, _ = _make_dummy_findings_and_citations()
     paper = PaperMetadata(paper_id="paper_1", title="RAG Architectures")
 
     calls = {"ingestion": 0, "summarization": 0, "verification": 0, "citation": 0}
@@ -659,7 +636,6 @@ def test_graph_normal_success_path_reaches_composer_node():
         return {"citations": citations}
 
     fake_overrides = {
-        "guided_input": lambda state: {},
         "search": lambda state: {
             "search_results": SearchResult(query="RAG", papers=[paper], total_results=1),
         },
@@ -669,30 +645,112 @@ def test_graph_normal_success_path_reaches_composer_node():
         "citation": spy_citation,
     }
 
-    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+    pipeline = build_research_graph(node_overrides=fake_overrides)
 
     initial_state = {
         "request_id": "req-success-path",
+        "research_topic": "RAG",
+    }
+
+    final_state = pipeline.invoke(initial_state)
+
+    # All research linear nodes were executed in sequence
+    assert calls["ingestion"] == 1
+    assert calls["summarization"] == 1
+    assert calls["verification"] == 1
+    assert calls["citation"] == 1
+
+    assert final_state.get("findings") == findings
+    assert final_state.get("citations") == citations
+    assert final_state.get("composer_results", []) == []
+
+
+def test_sequential_research_and_compose_graph_invocation():
+    """
+    End-to-end integration: research_graph runs first producing findings/citations,
+    then compose_graph reuses those findings to produce deliverables without re-running search.
+    """
+    findings, citations, guided_input = _make_dummy_findings_and_citations()
+    paper = PaperMetadata(paper_id="paper_1", title="RAG Architectures")
+
+    search_calls = 0
+
+    def mock_search(state):
+        nonlocal search_calls
+        search_calls += 1
+        return {
+            "search_results": SearchResult(query="RAG", papers=[paper], total_results=1)
+        }
+
+    research_overrides = {
+        "search": mock_search,
+        "ingestion": lambda s: {
+            "ingestion_results": [IngestionResult(paper_id="paper_1", metadata=paper, chunks=[])]
+        },
+        "summarization": lambda s: {"findings": findings},
+        "verification": lambda s: {},
+        "citation": lambda s: {"citations": citations},
+    }
+
+    research_pipe = build_research_graph(node_overrides=research_overrides)
+    compose_pipe = build_compose_graph()
+
+    # Step 1: Run research
+    research_state = research_pipe.invoke({
+        "request_id": "r1",
+        "research_topic": "RAG",
+    })
+
+    assert research_state.get("findings") is not None
+    assert research_state.get("citations") is not None
+    assert research_state.get("composer_results", []) == []
+    assert search_calls == 1
+
+    # Step 2: Later, run compose using research output
+    compose_state = compose_pipe.invoke({
+        **research_state,
+        "guided_input": guided_input,
+        "selected_outputs": [OutputType.PPT],
+    })
+
+    # Search was NOT called again
+    assert search_calls == 1
+    composer_results = compose_state.get("composer_results", [])
+    assert len(composer_results) == 1
+    assert composer_results[0].output_type == OutputType.PPT
+
+
+def test_backward_compatible_pipeline_graph():
+    """
+    Verify existing build_pipeline_graph still functions end-to-end as before.
+    """
+    findings, citations, guided_input = _make_dummy_findings_and_citations()
+    paper = PaperMetadata(paper_id="paper_1", title="RAG Architectures")
+
+    fake_overrides = {
+        "guided_input": lambda state: {},
+        "search": lambda state: {
+            "search_results": SearchResult(query="RAG", papers=[paper], total_results=1),
+        },
+        "ingestion": lambda s: {
+            "ingestion_results": [IngestionResult(paper_id="paper_1", metadata=paper, chunks=[])]
+        },
+        "summarization": lambda state: {"findings": findings},
+        "verification": lambda state: {},
+        "citation": lambda state: {"citations": citations},
+    }
+
+    pipeline = build_pipeline_graph(node_overrides=fake_overrides)
+
+    initial_state = {
+        "request_id": "req-legacy-path",
         "research_topic": "RAG",
         "guided_input": guided_input,
         "selected_outputs": [OutputType.LITERATURE_SURVEY],
     }
 
     final_state = pipeline.invoke(initial_state)
-
-    # All linear nodes were executed in sequence
-    assert calls["ingestion"] == 1
-    assert calls["summarization"] == 1
-    assert calls["verification"] == 1
-    assert calls["citation"] == 1
-
-    # Composer output was generated
     composer_results = final_state.get("composer_results", [])
     assert len(composer_results) == 1
     assert composer_results[0].output_type == OutputType.LITERATURE_SURVEY
-
-    # pipeline_status was not set to failed
-    status = final_state.get("pipeline_status")
-    if status is not None:
-        assert getattr(status, "stage", None) != "failed"
 

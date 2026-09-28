@@ -604,8 +604,114 @@ def build_pipeline_graph(
     return builder.compile()
 
 
-# Compiled main pipeline executable
+# Compiled main pipeline executable (backward compatibility)
 graph = build_pipeline_graph()
+
+
+# ---------------------------------------------------------------------------
+# Decoupled Research and Compose Graphs
+# ---------------------------------------------------------------------------
+
+def build_research_graph(
+    node_overrides: Optional[dict[str, Callable]] = None,
+):
+    """
+    Build and compile the research-only graph.
+    Flow: START -> search -> (conditional: stop on failure -> END, else continue) ->
+          ingestion -> (conditional: stop on failure -> END, else continue) ->
+          summarization -> verification -> citation -> END.
+    Accepts node_overrides so tests can inject fake nodes.
+    """
+    overrides = node_overrides or {}
+
+    builder = StateGraph(PipelineState)
+
+    builder.add_node("search", overrides.get("search", search_agent))
+    builder.add_node("ingestion", overrides.get("ingestion", ingestion_agent))
+    builder.add_node("summarization", overrides.get("summarization", summarization_agent))
+    builder.add_node("verification", overrides.get("verification", verification_agent))
+    builder.add_node("citation", overrides.get("citation", citation_agent))
+
+    builder.add_edge(START, "search")
+    builder.add_conditional_edges(
+        "search",
+        should_continue_after_search,
+        {
+            "continue": "ingestion",
+            "stop": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "ingestion",
+        should_continue_after_ingestion,
+        {
+            "continue": "summarization",
+            "stop": END,
+        },
+    )
+    builder.add_edge("summarization", "verification")
+    builder.add_edge("verification", "citation")
+    builder.add_edge("citation", END)
+
+    return builder.compile()
+
+
+def build_compose_graph(
+    node_overrides: Optional[dict[str, Callable]] = None,
+):
+    """
+    Build and compile the document composition graph.
+    Flow: START -> guided_input -> (conditional fan-out via route_to_composers) ->
+          composer nodes -> END.
+    Accepts node_overrides so tests can inject fake nodes.
+    """
+    overrides = node_overrides or {}
+
+    builder = StateGraph(PipelineState)
+
+    builder.add_node("guided_input", overrides.get("guided_input", guided_input_agent))
+    builder.add_node(
+        "composer_literature_survey",
+        overrides.get("composer_literature_survey", composer_literature_survey),
+    )
+    builder.add_node(
+        "composer_executive_summary",
+        overrides.get("composer_executive_summary", composer_executive_summary),
+    )
+    builder.add_node(
+        "composer_ppt",
+        overrides.get("composer_ppt", composer_ppt),
+    )
+    builder.add_node(
+        "composer_research_paper",
+        overrides.get("composer_research_paper", composer_research_paper),
+    )
+
+    builder.add_edge(START, "guided_input")
+
+    composer_node_names = [
+        "composer_literature_survey",
+        "composer_executive_summary",
+        "composer_ppt",
+        "composer_research_paper",
+    ]
+    builder.add_conditional_edges(
+        "guided_input",
+        route_to_composers,
+        composer_node_names,
+    )
+
+    builder.add_edge("composer_literature_survey", END)
+    builder.add_edge("composer_executive_summary", END)
+    builder.add_edge("composer_ppt", END)
+    builder.add_edge("composer_research_paper", END)
+
+    return builder.compile()
+
+
+# Compiled research and compose graph executables
+research_graph = build_research_graph()
+compose_graph = build_compose_graph()
 
 
 # ---------------------------------------------------------------------------
