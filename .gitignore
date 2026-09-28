@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 venv/
 backend/vectorstore/chroma_db/
+backend/generated_outputs/
