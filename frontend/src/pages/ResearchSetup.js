@@ -1,67 +1,38 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { startResearch } from "../api";
 import "./ResearchSetup.css";
 
 function ResearchSetup() {
   const navigate = useNavigate();
 
   const [topic, setTopic] = useState("");
-  const [selectedOutputs, setSelectedOutputs] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  const outputs = [
-    {
-      id: "literature_survey",
-      title: "Literature Survey",
-      description: "Organize and synthesize existing research",
-      icon: "⌘",
-    },
-    {
-      id: "executive_summary",
-      title: "Executive Summary",
-      description: "Get a concise overview of the research",
-      icon: "✦",
-    },
-    {
-      id: "ppt",
-      title: "Presentation",
-      description: "Generate a structured research presentation",
-      icon: "▣",
-    },
-    {
-      id: "research_paper",
-      title: "Research Paper",
-      description: "Create a structured academic paper",
-      icon: "◇",
-    },
-  ];
-
-  const toggleOutput = (id) => {
-    setSelectedOutputs((current) => {
-      if (current.includes(id)) {
-        return current.filter((item) => item !== id);
-      }
-
-      return [...current, id];
-    });
-  };
-
-  const handleContinue = () => {
+  const handleContinue = async () => {
     const cleanedTopic = topic.trim();
 
-    if (!cleanedTopic) {
+    if (!cleanedTopic || isLoading) {
       return;
     }
 
-    if (selectedOutputs.length === 0) {
-      return;
-    }
+    setIsLoading(true);
+    setError(null);
 
-    navigate("/guided-input", {
-      state: {
-        topic: cleanedTopic,
-        selectedOutputs: [...selectedOutputs],
-      },
-    });
+    try {
+      const response = await startResearch(cleanedTopic);
+      navigate("/research-progress", {
+        state: {
+          session_id: response.session_id,
+          topic: cleanedTopic,
+          phase: "research",
+        },
+      });
+    } catch (err) {
+      setError(err.message || "Failed to initiate research session. Please verify the backend is running.");
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -101,8 +72,8 @@ function ResearchSetup() {
           </h1>
 
           <p>
-            Tell us what you want to explore and choose the outputs
-            you need. Our agents will handle the research workflow.
+            Tell us what you want to explore. Our agents will autonomously
+            search, ingest, synthesize, and verify the literature before you choose your deliverables.
           </p>
         </div>
 
@@ -128,64 +99,23 @@ function ResearchSetup() {
             <div className="input-hint">
               Be as specific as possible for more relevant research.
             </div>
-          </div>
 
-          {/* Outputs */}
-          <div className="output-section">
-
-            <div className="section-title">
-              <div>
-                <label>Choose your outputs</label>
-
-                <p>
-                  Select one or more deliverables.
-                </p>
+            {error && (
+              <div
+                style={{
+                  marginTop: "12px",
+                  padding: "10px 14px",
+                  backgroundColor: "rgba(239, 68, 68, 0.12)",
+                  border: "1px solid rgba(239, 68, 68, 0.3)",
+                  borderRadius: "8px",
+                  color: "#f87171",
+                  fontSize: "14px",
+                  lineHeight: "1.4",
+                }}
+              >
+                ⚠️ {error}
               </div>
-
-              <span>
-                {selectedOutputs.length} selected
-              </span>
-            </div>
-
-            <div className="output-grid">
-
-              {outputs.map((output) => {
-                const isSelected =
-                  selectedOutputs.includes(output.id);
-
-                return (
-                  <button
-                    key={output.id}
-                    type="button"
-                    className={`output-card ${
-                      isSelected ? "selected" : ""
-                    }`}
-                    onClick={() =>
-                      toggleOutput(output.id)
-                    }
-                  >
-                    <div className="output-icon">
-                      {output.icon}
-                    </div>
-
-                    <div className="output-content">
-                      <strong>
-                        {output.title}
-                      </strong>
-
-                      <p>
-                        {output.description}
-                      </p>
-                    </div>
-
-                    <div className="selection-indicator">
-                      {isSelected ? "✓" : ""}
-                    </div>
-                  </button>
-                );
-              })}
-
-            </div>
+            )}
           </div>
 
           {/* Footer */}
@@ -194,19 +124,16 @@ function ResearchSetup() {
             <div>
               <span className="agent-status"></span>
 
-              Multi-agent workflow ready
+              {isLoading ? "Starting research session..." : "Multi-agent workflow ready"}
             </div>
 
             <button
               type="button"
               className="continue-button"
-              disabled={
-                !topic.trim() ||
-                selectedOutputs.length === 0
-              }
+              disabled={!topic.trim() || isLoading}
               onClick={handleContinue}
             >
-              Continue
+              {isLoading ? "Starting..." : "Continue"}
 
               <span>→</span>
             </button>
@@ -219,4 +146,4 @@ function ResearchSetup() {
   );
 }
 
-export default ResearchSetup;
+export default ResearchSetup;

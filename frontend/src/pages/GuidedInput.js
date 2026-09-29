@@ -1,5 +1,6 @@
-import { useLocation, useNavigate } from "react-router-dom";
 import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { submitGuidedInputTier, composeDocuments } from "../api";
 import "./GuidedInput.css";
 
 function GuidedInput() {
@@ -7,14 +8,28 @@ function GuidedInput() {
   const location = useLocation();
 
   const researchData = location.state || {};
-
+  const sessionId = researchData.session_id;
   const topic = researchData.topic || "";
 
-  const selectedOutputs = Array.isArray(
-    researchData.selectedOutputs
-  )
+  const selectedOutputs = Array.isArray(researchData.selectedOutputs)
     ? researchData.selectedOutputs
     : [];
+
+  const showPresentation = selectedOutputs.includes("ppt");
+  const showAcademic = selectedOutputs.includes("research_paper");
+
+  // Determine starting active tier
+  const initialTier =
+    researchData.nextTier &&
+    (researchData.nextTier === "presentation_info" ||
+      researchData.nextTier === "academic_info")
+      ? researchData.nextTier
+      : "cover_info";
+
+  const [activeTier, setActiveTier] = useState(initialTier);
+  const [completedTiers, setCompletedTiers] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
 
   const [coverInfo, setCoverInfo] = useState({
     title: topic,
@@ -41,14 +56,7 @@ function GuidedInput() {
     limitations: "",
   });
 
-  const showPresentation =
-    selectedOutputs.includes("ppt");
-
-  const showAcademic =
-    selectedOutputs.includes("research_paper");
-
-  const hasResearchData =
-    Boolean(topic) && selectedOutputs.length > 0;
+  const hasResearchData = Boolean(sessionId) && selectedOutputs.length > 0;
 
   const updateCover = (field, value) => {
     setCoverInfo((current) => ({
@@ -71,97 +79,218 @@ function GuidedInput() {
     }));
   };
 
-  const handleStartResearch = () => {
-    const guidedInput = {
-      coverInfo: {
-        title: coverInfo.title,
-        subtitle: coverInfo.subtitle || null,
+  // Helper to trigger compose and navigate
+  const triggerComposeAndNavigate = async () => {
+    try {
+      await composeDocuments(sessionId);
+      navigate("/research-progress", {
+        state: {
+          session_id: sessionId,
+          topic,
+          selectedOutputs,
+          phase: "compose",
+        },
+      });
+    } catch (err) {
+      setErrorMessage(err.message || "Failed to trigger document composition.");
+      setIsSubmitting(false);
+    }
+  };
 
-        authors: coverInfo.authors
-          ? coverInfo.authors
-              .split(",")
-              .map((author) => author.trim())
-              .filter(Boolean)
-          : [],
+  // ---------------------------------------------------------------------------
+  // Tier Submissions
+  // ---------------------------------------------------------------------------
 
-        institution: coverInfo.institution || null,
-        date: coverInfo.date || null,
-      },
+  const handleSubmitCover = async (e) => {
+    if (e) e.preventDefault();
+    if (!coverInfo.title.trim() || isSubmitting) return;
 
-      projectPresentationInfo: showPresentation
-        ? {
-            problem_statement:
-              presentationInfo.problemStatement,
+    setIsSubmitting(true);
+    setErrorMessage(null);
 
-            tech_stack:
-              presentationInfo.techStack
-                ? presentationInfo.techStack
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean)
-                : [],
-
-            own_architecture_summary:
-              presentationInfo.architecture,
-
-            own_results_summary:
-              presentationInfo.results,
-
-            project_timeline:
-              presentationInfo.timeline || null,
-          }
-        : null,
-
-      academicContentInfo: showAcademic
-        ? {
-            methodology:
-              academicInfo.methodology,
-
-            dataset_or_sample:
-              academicInfo.dataset,
-
-            tools_used:
-              academicInfo.tools
-                ? academicInfo.tools
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean)
-                : [],
-
-            what_was_measured:
-              academicInfo.measured,
-
-            key_results:
-              academicInfo.results,
-
-            limitations:
-              academicInfo.limitations || null,
-          }
-        : null,
+    const coverPayload = {
+      title: coverInfo.title.trim(),
+      subtitle: coverInfo.subtitle.trim() || null,
+      authors: coverInfo.authors
+        ? coverInfo.authors
+            .split(",")
+            .map((author) => author.trim())
+            .filter(Boolean)
+        : [],
+      institution: coverInfo.institution.trim() || null,
+      date: coverInfo.date.trim() || null,
     };
 
-    console.log("Research Topic:", topic);
-    console.log(
-      "Selected Outputs:",
-      selectedOutputs
-    );
-    console.log(
-      "Guided Input:",
-      guidedInput
-    );
+    try {
+      const res = await submitGuidedInputTier(sessionId, "cover_info", coverPayload);
 
-    navigate("/research-progress", {
-      state: {
-        topic,
-        selectedOutputs,
-        guidedInput,
-      },
-    });
+      if (!res.ok) {
+        setErrorMessage(res.error || "Failed to validate cover information.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      setCompletedTiers((prev) => Array.from(new Set([...prev, "cover_info"])));
+
+      if (res.is_complete) {
+        await triggerComposeAndNavigate();
+      } else if (res.next_tier) {
+        setActiveTier(res.next_tier);
+        setIsSubmitting(false);
+      } else {
+        // Fallback check against selected outputs
+        if (showPresentation && !completedTiers.includes("presentation_info")) {
+          setActiveTier("presentation_info");
+        } else if (showAcademic && !completedTiers.includes("academic_info")) {
+          setActiveTier("academic_info");
+        } else {
+          await triggerComposeAndNavigate();
+        }
+        setIsSubmitting(false);
+      }
+    } catch (err) {
+      setErrorMessage(err.message || "Network error submitting cover information.");
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSubmitPresentation = async (e) => {
+    if (e) e.preventDefault();
+    if (isSubmitting) return;
+
+    if (
+      !presentationInfo.problemStatement.trim() ||
+      !presentationInfo.techStack.trim() ||
+      !presentationInfo.architecture.trim() ||
+      !presentationInfo.results.trim()
+    ) {
+      setErrorMessage(
+        "Please fill in Problem Statement, Tech Stack, Architecture, and Results."
+      );
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+
+    const presentationPayload = {
+      problem_statement: presentationInfo.problemStatement.trim(),
+      tech_stack: presentationInfo.techStack
+        ? presentationInfo.techStack
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
+      own_architecture_summary: presentationInfo.architecture.trim(),
+      own_results_summary: presentationInfo.results.trim(),
+      project_timeline: presentationInfo.timeline.trim() || null,
+    };
+
+    try {
+      const res = await submitGuidedInputTier(
+        sessionId,
+        "presentation_info",
+        presentationPayload
+      );
+
+      if (!res.ok) {
+        setErrorMessage(res.error || "Failed to validate presentation information.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      setCompletedTiers((prev) =>
+        Array.from(new Set([...prev, "presentation_info"]))
+      );
+
+      if (res.is_complete) {
+        await triggerComposeAndNavigate();
+      } else if (res.next_tier) {
+        setActiveTier(res.next_tier);
+        setIsSubmitting(false);
+      } else {
+        if (showAcademic && !completedTiers.includes("academic_info")) {
+          setActiveTier("academic_info");
+        } else {
+          await triggerComposeAndNavigate();
+        }
+        setIsSubmitting(false);
+      }
+    } catch (err) {
+      setErrorMessage(
+        err.message || "Network error submitting presentation information."
+      );
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSubmitAcademic = async (e) => {
+    if (e) e.preventDefault();
+    if (isSubmitting) return;
+
+    if (
+      !academicInfo.methodology.trim() ||
+      !academicInfo.dataset.trim() ||
+      !academicInfo.tools.trim() ||
+      !academicInfo.measured.trim() ||
+      !academicInfo.results.trim()
+    ) {
+      setErrorMessage(
+        "Please fill in Methodology, Dataset, Tools, What Was Measured, and Key Results."
+      );
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+
+    const academicPayload = {
+      methodology: academicInfo.methodology.trim(),
+      dataset_or_sample: academicInfo.dataset.trim(),
+      tools_used: academicInfo.tools
+        ? academicInfo.tools
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
+      what_was_measured: academicInfo.measured.trim(),
+      key_results: academicInfo.results.trim(),
+      limitations: academicInfo.limitations.trim() || null,
+    };
+
+    try {
+      const res = await submitGuidedInputTier(
+        sessionId,
+        "academic_info",
+        academicPayload
+      );
+
+      if (!res.ok) {
+        setErrorMessage(res.error || "Failed to validate academic content.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      setCompletedTiers((prev) =>
+        Array.from(new Set([...prev, "academic_info"]))
+      );
+
+      if (res.is_complete) {
+        await triggerComposeAndNavigate();
+      } else if (res.next_tier) {
+        setActiveTier(res.next_tier);
+        setIsSubmitting(false);
+      } else {
+        await triggerComposeAndNavigate();
+      }
+    } catch (err) {
+      setErrorMessage(err.message || "Network error submitting academic content.");
+      setIsSubmitting(false);
+    }
   };
 
   /*
-   * If the user opens /guided-input directly
-   * without coming from Research Setup.
+   * If the user opens /guided-input directly without session state
    */
   if (!hasResearchData) {
     return (
@@ -177,10 +306,7 @@ function GuidedInput() {
 
         <main className="guided-container">
           <div className="guided-empty-state">
-
-            <div className="guided-empty-icon">
-              !
-            </div>
+            <div className="guided-empty-icon">!</div>
 
             <h1>
               No research project
@@ -189,8 +315,8 @@ function GuidedInput() {
             </h1>
 
             <p>
-              Please start a new research project
-              before opening the Guided Input page.
+              Please start a new research project and select deliverables before
+              opening Guided Input.
             </p>
 
             <button
@@ -201,7 +327,6 @@ function GuidedInput() {
               Start a Research Project
               <span>→</span>
             </button>
-
           </div>
         </main>
       </div>
@@ -210,12 +335,10 @@ function GuidedInput() {
 
   return (
     <div className="guided-page">
-
       <div className="guided-background-glow"></div>
 
       {/* Header */}
       <header className="guided-header">
-
         <div className="guided-logo">
           <span>✦</span>
           ResearchAI
@@ -224,19 +347,20 @@ function GuidedInput() {
         <button
           type="button"
           className="back-button"
-          onClick={() => navigate("/research")}
+          onClick={() =>
+            navigate("/research-results", {
+              state: { session_id: sessionId, topic },
+            })
+          }
         >
-          ← Back
+          ← Back to Results
         </button>
-
       </header>
 
-      {/* Main */}
+      {/* Main Container */}
       <main className="guided-container">
-
         {/* Heading */}
         <div className="guided-heading">
-
           <div className="guided-eyebrow">
             <span></span>
             RESEARCH CONFIGURATION
@@ -249,503 +373,382 @@ function GuidedInput() {
           </h1>
 
           <p>
-            Provide a few details so our agents can
-            create accurate, personalized research
-            outputs.
+            Provide details for each required section so our agents can compose
+            grounded, personalized deliverables.
           </p>
-
         </div>
 
-        {/* Progress */}
+        {/* Stepper Progress */}
         <div className="guided-progress">
-
-          <div className="progress-step active">
+          <div
+            className={`progress-step ${
+              activeTier === "cover_info"
+                ? "active"
+                : completedTiers.includes("cover_info")
+                ? "completed"
+                : ""
+            }`}
+            onClick={() => setActiveTier("cover_info")}
+            style={{ cursor: "pointer" }}
+          >
             <span>01</span>
-            Cover Information
+            Cover Information {completedTiers.includes("cover_info") && "✓"}
           </div>
 
           {showPresentation && (
-            <div className="progress-step active">
+            <div
+              className={`progress-step ${
+                activeTier === "presentation_info"
+                  ? "active"
+                  : completedTiers.includes("presentation_info")
+                  ? "completed"
+                  : ""
+              }`}
+              onClick={() => setActiveTier("presentation_info")}
+              style={{ cursor: "pointer" }}
+            >
               <span>02</span>
-              Presentation
+              Presentation {completedTiers.includes("presentation_info") && "✓"}
             </div>
           )}
 
           {showAcademic && (
-            <div className="progress-step active">
-              <span>
-                {showPresentation ? "03" : "02"}
-              </span>
-              Academic Content
+            <div
+              className={`progress-step ${
+                activeTier === "academic_info"
+                  ? "active"
+                  : completedTiers.includes("academic_info")
+                  ? "completed"
+                  : ""
+              }`}
+              onClick={() => setActiveTier("academic_info")}
+              style={{ cursor: "pointer" }}
+            >
+              <span>{showPresentation ? "03" : "02"}</span>
+              Academic Content {completedTiers.includes("academic_info") && "✓"}
             </div>
           )}
-
         </div>
 
-        {/* Cover Information */}
-        <section className="guided-card">
-
-          <div className="card-heading">
-
-            <div className="card-number">
-              01
-            </div>
-
-            <div>
-              <h2>
-                Cover Information
-              </h2>
-
-              <p>
-                Basic information used across
-                your generated documents.
-              </p>
-            </div>
-
-            <span className="required-label">
-              REQUIRED
-            </span>
-
+        {/* Global Error Banner */}
+        {errorMessage && (
+          <div
+            style={{
+              padding: "14px 18px",
+              backgroundColor: "rgba(239, 68, 68, 0.12)",
+              border: "1px solid rgba(239, 68, 68, 0.3)",
+              borderRadius: "10px",
+              color: "#f87171",
+              fontSize: "14px",
+              marginBottom: "20px",
+            }}
+          >
+            ⚠️ {errorMessage}
           </div>
+        )}
 
-          <div className="form-grid">
-
-            <div className="form-group full-width">
-
-              <label>
-                Research Title
-              </label>
-
-              <input
-                type="text"
-                value={coverInfo.title}
-                onChange={(event) =>
-                  updateCover(
-                    "title",
-                    event.target.value
-                  )
-                }
-                placeholder="Enter your research title"
-              />
-
-            </div>
-
-            <div className="form-group">
-
-              <label>
-                Subtitle
-              </label>
-
-              <input
-                type="text"
-                value={coverInfo.subtitle}
-                onChange={(event) =>
-                  updateCover(
-                    "subtitle",
-                    event.target.value
-                  )
-                }
-                placeholder="Optional subtitle"
-              />
-
-            </div>
-
-            <div className="form-group">
-
-              <label>
-                Authors
-              </label>
-
-              <input
-                type="text"
-                value={coverInfo.authors}
-                onChange={(event) =>
-                  updateCover(
-                    "authors",
-                    event.target.value
-                  )
-                }
-                placeholder="e.g. Sneha Konade, Student 2"
-              />
-
-            </div>
-
-            <div className="form-group">
-
-              <label>
-                Institution
-              </label>
-
-              <input
-                type="text"
-                value={coverInfo.institution}
-                onChange={(event) =>
-                  updateCover(
-                    "institution",
-                    event.target.value
-                  )
-                }
-                placeholder="College / University"
-              />
-
-            </div>
-
-            <div className="form-group">
-
-              <label>
-                Date
-              </label>
-
-              <input
-                type="text"
-                value={coverInfo.date}
-                onChange={(event) =>
-                  updateCover(
-                    "date",
-                    event.target.value
-                  )
-                }
-                placeholder="e.g. September 2026"
-              />
-
-            </div>
-
-          </div>
-
-        </section>
-
-        {/* Presentation Information */}
-        {showPresentation && (
+        {/* Section 1: Cover Information */}
+        {activeTier === "cover_info" && (
           <section className="guided-card">
-
             <div className="card-heading">
-
-              <div className="card-number">
-                02
-              </div>
+              <div className="card-number">01</div>
 
               <div>
-                <h2>
-                  Project Presentation
-                </h2>
-
-                <p>
-                  Information needed to create
-                  your presentation.
-                </p>
+                <h2>Cover Information</h2>
+                <p>Basic information used across your generated documents.</p>
               </div>
 
-              <span className="required-label">
-                PPT SELECTED
-              </span>
-
+              <span className="required-label">REQUIRED</span>
             </div>
 
             <div className="form-grid">
-
               <div className="form-group full-width">
-
-                <label>
-                  Problem Statement
-                </label>
-
-                <textarea
-                  rows="4"
-                  value={
-                    presentationInfo.problemStatement
-                  }
-                  onChange={(event) =>
-                    updatePresentation(
-                      "problemStatement",
-                      event.target.value
-                    )
-                  }
-                  placeholder="What problem does your project solve?"
-                />
-
-              </div>
-
-              <div className="form-group">
-
-                <label>
-                  Technology Stack
-                </label>
-
-                <textarea
-                  rows="3"
-                  value={
-                    presentationInfo.techStack
-                  }
-                  onChange={(event) =>
-                    updatePresentation(
-                      "techStack",
-                      event.target.value
-                    )
-                  }
-                  placeholder="e.g. React, FastAPI, LangGraph..."
-                />
-
-              </div>
-
-              <div className="form-group">
-
-                <label>
-                  Architecture Summary
-                </label>
-
-                <textarea
-                  rows="3"
-                  value={
-                    presentationInfo.architecture
-                  }
-                  onChange={(event) =>
-                    updatePresentation(
-                      "architecture",
-                      event.target.value
-                    )
-                  }
-                  placeholder="Briefly describe your system architecture."
-                />
-
-              </div>
-
-              <div className="form-group full-width">
-
-                <label>
-                  Own Results Summary
-                </label>
-
-                <textarea
-                  rows="4"
-                  value={
-                    presentationInfo.results
-                  }
-                  onChange={(event) =>
-                    updatePresentation(
-                      "results",
-                      event.target.value
-                    )
-                  }
-                  placeholder="Describe your project's actual results or current findings."
-                />
-
-              </div>
-
-              <div className="form-group full-width">
-
-                <label>
-                  Project Timeline
-                </label>
-
+                <label>Research Title</label>
                 <input
                   type="text"
-                  value={
-                    presentationInfo.timeline
-                  }
-                  onChange={(event) =>
-                    updatePresentation(
-                      "timeline",
-                      event.target.value
-                    )
-                  }
-                  placeholder="Optional project timeline"
+                  value={coverInfo.title}
+                  onChange={(event) => updateCover("title", event.target.value)}
+                  placeholder="Enter your research title"
                 />
-
               </div>
 
+              <div className="form-group">
+                <label>Subtitle</label>
+                <input
+                  type="text"
+                  value={coverInfo.subtitle}
+                  onChange={(event) =>
+                    updateCover("subtitle", event.target.value)
+                  }
+                  placeholder="Optional subtitle"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Authors</label>
+                <input
+                  type="text"
+                  value={coverInfo.authors}
+                  onChange={(event) =>
+                    updateCover("authors", event.target.value)
+                  }
+                  placeholder="e.g. Sneha Konade, Student 2"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Institution</label>
+                <input
+                  type="text"
+                  value={coverInfo.institution}
+                  onChange={(event) =>
+                    updateCover("institution", event.target.value)
+                  }
+                  placeholder="College / University"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Date</label>
+                <input
+                  type="text"
+                  value={coverInfo.date}
+                  onChange={(event) => updateCover("date", event.target.value)}
+                  placeholder="e.g. September 2026"
+                />
+              </div>
             </div>
 
+            <div className="guided-footer" style={{ marginTop: "24px" }}>
+              <div className="guided-status">
+                <span className="agent-status"></span>
+                Step 1 of {1 + (showPresentation ? 1 : 0) + (showAcademic ? 1 : 0)}
+              </div>
+
+              <button
+                type="button"
+                className="start-research-button"
+                onClick={handleSubmitCover}
+                disabled={!coverInfo.title.trim() || isSubmitting}
+              >
+                {isSubmitting
+                  ? "Saving..."
+                  : showPresentation || showAcademic
+                  ? "Save & Continue"
+                  : "Save & Generate Deliverables"}
+                <span>→</span>
+              </button>
+            </div>
           </section>
         )}
 
-        {/* Academic Information */}
-        {showAcademic && (
+        {/* Section 2: Presentation Information */}
+        {showPresentation && activeTier === "presentation_info" && (
           <section className="guided-card">
-
             <div className="card-heading">
+              <div className="card-number">02</div>
 
+              <div>
+                <h2>Project Presentation</h2>
+                <p>Information needed to create your presentation deck.</p>
+              </div>
+
+              <span className="required-label">PPT SELECTED</span>
+            </div>
+
+            <div className="form-grid">
+              <div className="form-group full-width">
+                <label>Problem Statement</label>
+                <textarea
+                  rows="3"
+                  value={presentationInfo.problemStatement}
+                  onChange={(event) =>
+                    updatePresentation("problemStatement", event.target.value)
+                  }
+                  placeholder="What core problem or challenge does this research address?"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Tech Stack</label>
+                <input
+                  type="text"
+                  value={presentationInfo.techStack}
+                  onChange={(event) =>
+                    updatePresentation("techStack", event.target.value)
+                  }
+                  placeholder="e.g. Python, PyTorch, LangChain"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Project Timeline</label>
+                <input
+                  type="text"
+                  value={presentationInfo.timeline}
+                  onChange={(event) =>
+                    updatePresentation("timeline", event.target.value)
+                  }
+                  placeholder="e.g. Q3 2026"
+                />
+              </div>
+
+              <div className="form-group full-width">
+                <label>Architecture Summary</label>
+                <textarea
+                  rows="3"
+                  value={presentationInfo.architecture}
+                  onChange={(event) =>
+                    updatePresentation("architecture", event.target.value)
+                  }
+                  placeholder="Describe your system or project architecture."
+                />
+              </div>
+
+              <div className="form-group full-width">
+                <label>Results Summary</label>
+                <textarea
+                  rows="3"
+                  value={presentationInfo.results}
+                  onChange={(event) =>
+                    updatePresentation("results", event.target.value)
+                  }
+                  placeholder="Summarize your experimental results or project outcomes."
+                />
+              </div>
+            </div>
+
+            <div className="guided-footer" style={{ marginTop: "24px" }}>
+              <div className="guided-status">
+                <span className="agent-status"></span>
+                Step {1 + 1} of {1 + (showPresentation ? 1 : 0) + (showAcademic ? 1 : 0)}
+              </div>
+
+              <button
+                type="button"
+                className="start-research-button"
+                onClick={handleSubmitPresentation}
+                disabled={isSubmitting}
+              >
+                {isSubmitting
+                  ? "Saving..."
+                  : showAcademic
+                  ? "Save & Continue"
+                  : "Save & Generate Deliverables"}
+                <span>→</span>
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* Section 3: Academic Content */}
+        {showAcademic && activeTier === "academic_info" && (
+          <section className="guided-card">
+            <div className="card-heading">
               <div className="card-number">
                 {showPresentation ? "03" : "02"}
               </div>
 
               <div>
-                <h2>
-                  Academic Content
-                </h2>
-
-                <p>
-                  Information required for
-                  the research paper.
-                </p>
+                <h2>Academic Content</h2>
+                <p>Information required to format your formal research paper.</p>
               </div>
 
-              <span className="required-label">
-                PAPER SELECTED
-              </span>
-
+              <span className="required-label">RESEARCH PAPER</span>
             </div>
 
             <div className="form-grid">
-
               <div className="form-group full-width">
-
-                <label>
-                  Methodology
-                </label>
-
+                <label>Methodology</label>
                 <textarea
-                  rows="4"
-                  value={
-                    academicInfo.methodology
-                  }
+                  rows="3"
+                  value={academicInfo.methodology}
                   onChange={(event) =>
-                    updateAcademic(
-                      "methodology",
-                      event.target.value
-                    )
+                    updateAcademic("methodology", event.target.value)
                   }
                   placeholder="Describe the methodology used in your research."
                 />
-
               </div>
 
               <div className="form-group">
-
-                <label>
-                  Dataset / Sample
-                </label>
-
+                <label>Dataset / Sample</label>
                 <textarea
                   rows="3"
-                  value={
-                    academicInfo.dataset
-                  }
+                  value={academicInfo.dataset}
                   onChange={(event) =>
-                    updateAcademic(
-                      "dataset",
-                      event.target.value
-                    )
+                    updateAcademic("dataset", event.target.value)
                   }
                   placeholder="Describe your dataset or sample."
                 />
-
               </div>
 
               <div className="form-group">
-
-                <label>
-                  Tools Used
-                </label>
-
+                <label>Tools Used</label>
                 <textarea
                   rows="3"
-                  value={
-                    academicInfo.tools
-                  }
+                  value={academicInfo.tools}
                   onChange={(event) =>
-                    updateAcademic(
-                      "tools",
-                      event.target.value
-                    )
+                    updateAcademic("tools", event.target.value)
                   }
                   placeholder="e.g. Python, React, FastAPI"
                 />
-
               </div>
 
               <div className="form-group">
-
-                <label>
-                  What Was Measured?
-                </label>
-
+                <label>What Was Measured?</label>
                 <textarea
                   rows="3"
-                  value={
-                    academicInfo.measured
-                  }
+                  value={academicInfo.measured}
                   onChange={(event) =>
-                    updateAcademic(
-                      "measured",
-                      event.target.value
-                    )
+                    updateAcademic("measured", event.target.value)
                   }
                   placeholder="What metrics, outcomes, or variables were measured?"
                 />
-
               </div>
 
               <div className="form-group">
-
-                <label>
-                  Key Results
-                </label>
-
+                <label>Key Results</label>
                 <textarea
                   rows="3"
-                  value={
-                    academicInfo.results
-                  }
+                  value={academicInfo.results}
                   onChange={(event) =>
-                    updateAcademic(
-                      "results",
-                      event.target.value
-                    )
+                    updateAcademic("results", event.target.value)
                   }
                   placeholder="Enter your actual research results."
                 />
-
               </div>
 
               <div className="form-group full-width">
-
-                <label>
-                  Limitations
-                </label>
-
+                <label>Limitations</label>
                 <textarea
                   rows="3"
-                  value={
-                    academicInfo.limitations
-                  }
+                  value={academicInfo.limitations}
                   onChange={(event) =>
-                    updateAcademic(
-                      "limitations",
-                      event.target.value
-                    )
+                    updateAcademic("limitations", event.target.value)
                   }
                   placeholder="Optional limitations of your research."
                 />
-
               </div>
-
             </div>
 
+            <div className="guided-footer" style={{ marginTop: "24px" }}>
+              <div className="guided-status">
+                <span className="agent-status"></span>
+                Final Step of {1 + (showPresentation ? 1 : 0) + (showAcademic ? 1 : 0)}
+              </div>
+
+              <button
+                type="button"
+                className="start-research-button"
+                onClick={handleSubmitAcademic}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? "Generating Deliverables..." : "Complete & Generate Deliverables"}
+                <span>→</span>
+              </button>
+            </div>
           </section>
         )}
-
-        {/* Footer */}
-        <div className="guided-footer">
-
-          <div className="guided-status">
-            <span className="agent-status"></span>
-
-            Your information stays within this research session.
-          </div>
-
-          <button
-            type="button"
-            className="start-research-button"
-            onClick={handleStartResearch}
-            disabled={!coverInfo.title.trim()}
-          >
-            Start Research
-
-            <span>→</span>
-          </button>
-
-        </div>
-
       </main>
     </div>
   );

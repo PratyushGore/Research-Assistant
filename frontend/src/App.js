@@ -4,6 +4,7 @@ import Home from "./pages/Home";
 import ResearchSetup from "./pages/ResearchSetup";
 import GuidedInput from "./pages/GuidedInput";
 import ResearchProgress from "./pages/ResearchProgress";
+import ResearchResults from "./pages/ResearchResults";
 import Outputs from "./pages/Outputs";
 
 function App() {
@@ -22,13 +23,18 @@ function App() {
         />
 
         <Route
-          path="/guided-input"
-          element={<GuidedInput />}
+          path="/research-progress"
+          element={<ResearchProgress />}
         />
 
         <Route
-          path="/research-progress"
-          element={<ResearchProgress />}
+          path="/research-results"
+          element={<ResearchResults />}
+        />
+
+        <Route
+          path="/guided-input"
+          element={<GuidedInput />}
         />
 
         <Route
