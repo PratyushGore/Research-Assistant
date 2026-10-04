@@ -1,7 +1,31 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Caches and temporary directories
+.cache/
+.pytest_cache/
 __pycache__/
 *.pyc
-.env
-.venv/
-venv/
-backend/vectorstore/chroma_db/
+
+# Backend generated artifacts and database
 backend/generated_outputs/
+backend/vectorstore/chroma_db/
+
+# Frontend
+frontend/node_modules/
+frontend/build/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+*.zip
+
+# Virtual environments
+.venv/
+venv/
