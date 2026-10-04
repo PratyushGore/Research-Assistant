@@ -1,6 +1,6 @@
 from enum import Enum
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Literal, Optional
+from pydantic import BaseModel, Field, field_validator
 
 
 class OutputType(str, Enum):
@@ -94,6 +94,21 @@ class PaperSummary(BaseModel):
     summary: str
     key_findings: list[str] = Field(default_factory=list)
     extracted_claims: list[Claim] = Field(default_factory=list)
+    title: Optional[str] = None
+    authors: list[str] = Field(default_factory=list)
+    year: Optional[int] = None
+    venue: Optional[str] = None
+    url: Optional[str] = None
+
+
+class ContradictionDetail(BaseModel):
+    claim_a_id: str
+    claim_b_id: str
+    paper_a_id: str
+    paper_b_id: str
+    explanation: str
+    shared_subject: str
+    extra_claim_ids: list[str] = Field(default_factory=list)
 
 
 class FindingsPacket(BaseModel):
@@ -101,7 +116,11 @@ class FindingsPacket(BaseModel):
     summaries: list[PaperSummary] = Field(default_factory=list)
     claims: list[Claim] = Field(default_factory=list)
     contradictions: list[str] = Field(default_factory=list)
+    contradiction_details: list[ContradictionDetail] = Field(default_factory=list)
     cross_paper_synthesis: Optional[str] = None
+    requested_papers: Optional[int] = None
+    available_papers: Optional[int] = None
+    paper_notice: Optional[str] = None
 
 
 class VerificationResult(BaseModel):
@@ -135,6 +154,66 @@ class ComposerRequest(BaseModel):
     template: Optional[OutputTemplate] = None
 
 
+class FigureSpec(BaseModel):
+    figure_id: str
+    kind: Literal["bar_chart", "diagram"]
+    title: str
+    labels: list[str] = Field(default_factory=list)
+    values: list[float] = Field(default_factory=list)
+    data_source: Optional[str] = None
+    nodes: list[str] = Field(default_factory=list)
+    edges: list[tuple[str, str]] = Field(default_factory=list)
+
+
+class ContentBlock(BaseModel):
+    kind: Literal["paragraph", "bullets", "table", "callout", "key_numbers", "figure"]
+    text: Optional[str] = None
+    items: list[str] = Field(default_factory=list)
+    table_header: list[str] = Field(default_factory=list)
+    table_rows: list[list[str]] = Field(default_factory=list)
+    caption: Optional[str] = None
+    figure_id: Optional[str] = None
+    claim_ids: list[str] = Field(default_factory=list)
+
+
+class DocSection(BaseModel):
+    heading: str
+    blocks: list[ContentBlock] = Field(default_factory=list)
+
+
+class SlideSpec(BaseModel):
+    layout: Literal[
+        "title",
+        "agenda",
+        "section_divider",
+        "bullets",
+        "table",
+        "chart",
+        "diagram",
+        "closing",
+    ]
+    title: str
+    bullets: list[str] = Field(default_factory=list)
+    table_header: list[str] = Field(default_factory=list)
+    table_rows: list[list[str]] = Field(default_factory=list)
+    figure_id: Optional[str] = None
+    notes: Optional[str] = None
+    claim_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("bullets")
+    @classmethod
+    def validate_bullets_max_five(cls, v: list[str]) -> list[str]:
+        if len(v) > 5:
+            raise ValueError("Slide bullets list cannot exceed 5 items.")
+        return v
+
+
+class StructuredContent(BaseModel):
+    sections: list[DocSection] = Field(default_factory=list)
+    slides: list[SlideSpec] = Field(default_factory=list)
+    figures: list[FigureSpec] = Field(default_factory=list)
+
+
 class ComposerResult(BaseModel):
     output_type: OutputType
     title: str
@@ -142,6 +221,7 @@ class ComposerResult(BaseModel):
     sections: dict[str, str] = Field(default_factory=dict)
     citations_used: list[str] = Field(default_factory=list)
     file_path: Optional[str] = None
+    structured: Optional[StructuredContent] = None
 
 
 class DocumentReviewRequest(BaseModel):
