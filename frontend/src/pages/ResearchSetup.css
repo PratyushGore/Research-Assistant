@@ -195,6 +195,90 @@
 }
 
 /* =========================================
+   Paper Count Stepper
+   ========================================= */
+
+.paper-count-section {
+  margin-bottom: 34px;
+}
+
+.paper-count-section label {
+  display: block;
+  color: #e2e2e2;
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 11px;
+}
+
+.stepper-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #080808;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 12px;
+  padding: 6px;
+  width: fit-content;
+  transition: 0.25s ease;
+}
+
+.stepper-control:focus-within {
+  border-color: rgba(255, 91, 20, 0.7);
+  box-shadow: 0 0 0 3px rgba(255, 91, 20, 0.07);
+}
+
+.stepper-button {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #141414;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.stepper-button:hover:not(:disabled) {
+  background: rgba(255, 91, 20, 0.15);
+  border-color: rgba(255, 91, 20, 0.5);
+  color: #ff5b14;
+}
+
+.stepper-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.05);
+  background: #0a0a0a;
+  color: #666666;
+}
+
+.stepper-input {
+  width: 52px;
+  height: 38px;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.stepper-input::-webkit-outer-spin-button,
+.stepper-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* =========================================
    Output Section
    ========================================= */
 

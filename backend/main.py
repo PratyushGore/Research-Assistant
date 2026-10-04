@@ -57,6 +57,7 @@ app.add_middleware(
 
 class ResearchRequest(BaseModel):
     topic: str = Field(..., description="Research topic to investigate")
+    max_papers: int = Field(default=8, ge=3, le=15, description="Maximum number of papers to ingest")
 
 
 class QARequest(BaseModel):
@@ -140,11 +141,14 @@ async def general_exception_handler(request: Request, exc: Exception):
 # Background Workers
 # ---------------------------------------------------------------------------
 
-def _run_research_sync(session_id: str, topic: str, loop: asyncio.AbstractEventLoop) -> None:
+def _run_research_sync(session_id: str, topic: str, loop: asyncio.AbstractEventLoop, max_papers: int = 8) -> None:
     tracker = get_or_create_tracker(session_id)
+    record = get_session(session_id)
+    mp = record.get("max_papers", max_papers)
     initial_state = {
         "request_id": session_id,
         "research_topic": topic,
+        "max_papers": mp,
     }
     accumulated_state: dict[str, Any] = dict(initial_state)
 
@@ -269,11 +273,11 @@ async def create_research(body: ResearchRequest):
         raise HTTPException(status_code=400, detail="Research topic cannot be empty.")
 
     topic = body.topic.strip()
-    session_id = start_research(topic)
+    session_id = start_research(topic, max_papers=body.max_papers)
     tracker = get_or_create_tracker(session_id)
 
     loop = asyncio.get_running_loop()
-    _executor.submit(_run_research_sync, session_id, topic, loop)
+    _executor.submit(_run_research_sync, session_id, topic, loop, body.max_papers)
 
     return {"session_id": session_id}
 

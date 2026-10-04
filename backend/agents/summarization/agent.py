@@ -29,7 +29,7 @@ logger = logging.getLogger("research_assistant.summarization")
 
 AGENT_NAME = "summarization_agent"
 TOP_K_CHUNKS = 6
-MAX_CLAIMS_PER_PAPER = 5
+MAX_CLAIMS_PER_PAPER = 8
 
 
 def _select_relevant_chunks(topic: str, ingestion_result: IngestionResult, k: int = TOP_K_CHUNKS):

@@ -57,15 +57,56 @@ async function handleResponse(response) {
   throw error;
 }
 
+const STORAGE_KEY = "research_max_papers";
+let memoryMaxPapers = 8;
+
+export function getLastMaxPapers() {
+  try {
+    if (typeof window !== "undefined" && window.sessionStorage) {
+      const stored = window.sessionStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const num = parseInt(stored, 10);
+        if (!isNaN(num) && num >= 3 && num <= 15) {
+          return num;
+        }
+      }
+    }
+  } catch {
+    // sessionStorage not available
+  }
+  return memoryMaxPapers;
+}
+
+export function setLastMaxPapers(val) {
+  const num = Number(val);
+  const valid = !isNaN(num) ? Math.min(15, Math.max(3, num)) : 8;
+  memoryMaxPapers = valid;
+  try {
+    if (typeof window !== "undefined" && window.sessionStorage) {
+      window.sessionStorage.setItem(STORAGE_KEY, String(valid));
+    }
+  } catch {
+    // sessionStorage not available
+  }
+  return valid;
+}
+
 /**
  * Start a research session for a given topic.
- * POST /research { topic } -> { session_id }
+ * POST /research { topic, max_papers } -> { session_id }
  */
-export async function startResearch(topic) {
+export async function startResearch(topic, maxPapers) {
+  let papers = maxPapers;
+  if (papers === undefined || papers === null) {
+    papers = getLastMaxPapers();
+  } else {
+    papers = setLastMaxPapers(papers);
+  }
+
   const response = await fetch(`${API_BASE}/research`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic }),
+    body: JSON.stringify({ topic, max_papers: papers }),
   });
   return handleResponse(response);
 }
@@ -145,3 +186,23 @@ export async function getResults(sessionId) {
   });
   return handleResponse(response);
 }
+
+/**
+ * Fetch a deliverable file as Blob and ArrayBuffer for preview rendering.
+ * @param {string} downloadUrl Relative or absolute deliverable URL
+ * @returns {Promise<{ blob: Blob, arrayBuffer: ArrayBuffer }>}
+ */
+export async function fetchDeliverableFile(downloadUrl) {
+  const fullUrl = getDownloadUrl(downloadUrl);
+  if (!fullUrl) {
+    throw new Error("No download URL provided.");
+  }
+  const response = await fetch(fullUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch file for preview (HTTP ${response.status})`);
+  }
+  const blob = await response.blob();
+  const arrayBuffer = await blob.arrayBuffer();
+  return { blob, arrayBuffer };
+}
+

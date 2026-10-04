@@ -1,30 +1,6 @@
-Listed directory Research%20Agent
-Ran command: `Get-ChildItem -Force`
-Ran command: `python -c "import pydantic; print(pydantic.__version__)"`
-Created schemas.py
-Ran command: `python -c "
-import sys
-sys.path.append('.')
-from backend.schemas.schemas import *
+# Internal Team Notes & Reference Guide
 
-c = Claim(claim_id='c1', text='AI is effective', source_paper_id='p1', source_chunk_ids=['chk1'])
-assert c.verification_status == 'pending'
-assert c.revision_attempts == 0
-
-req = PipelineRequest(
-    request_id='req1',
-    guided_input=GuidedInputBundle(
-        cover_info=CoverInfo(title='Quantum Computing'),
-        project_presentation_info=None,
-        academic_content_info=None
-    )
-)
-print('Schemas imported and validated successfully!')
-"`
-Ran command: `Get-ChildItem -Recurse`
-Ran command: `Remove-Item -Recurse -Force backend\schemas\__pycache__`
-
-The data contract has been created in [schemas.py](file:///c:/Users/praty/OneDrive/Desktop/Research%20Agent/backend/schemas/schemas.py).
+This document archives internal team notes, schema reference guides, and integration guidelines from earlier project phases.
 
 ---
 
@@ -86,6 +62,7 @@ The data contract has been created in [schemas.py](file:///c:/Users/praty/OneDri
 2. **`VerificationResult` Status Values**: Should we restrict `verification_status` in `VerificationResult` and `Claim` to an explicit `Enum` (e.g., `PENDING`, `VERIFIED`, `REFUTED`, `INSUFFICIENT_EVIDENCE`) rather than an open string?
 3. **`DocumentReviewResult` Loop Trigger**: When `passed=False` in `DocumentReviewResult`, should the orchestrator pass `suggested_revisions` back to the **Composer Agent** (via a revision field in `ComposerRequest`), or should it trigger an upstream revision in the **Summarization Agent** / **Verification Agent**?
 
+---
 
 ### How to Plug In Your Agent
 Each teammate can plug their agent logic into `backend/orchestrator/graph.py` without altering the graph's structure or wiring.
@@ -106,7 +83,7 @@ def your_agent_name(state: PipelineState) -> PipelineState:
     return state
 ```
 
-#### 2. Where Stubs Live in `graph.py`
+#### 2. Agent Node Map in `graph.py`
 
 | Agent Stub Function | Current Stub Location | State Field Primarily Read / Updated |
 | :--- | :--- | :--- |
@@ -120,20 +97,16 @@ def your_agent_name(state: PipelineState) -> PipelineState:
 | `document_review_agent` | `backend/orchestrator/graph.py` | Reads `composer_results` / `document_review_request`, sets `document_review_result` |
 | `user_qa_agent` | `backend/orchestrator/graph.py` | Reads `user_qa_request`, sets `user_qa_response` |
 
-To integrate an external module, replace the stub body with a delegate call to your module (e.g., `from backend.agents.search import run_search` and call `run_search(state)`).
-
 ---
 
-### LangGraph API Architecture Note: Dual QA Systems
-
-To ensure complete clarity between Person C's frontend and Person B/D's agent implementations:
+### LangGraph Architecture Note: Dual QA Systems
 
 1. **Document Review Agent (`document_review_agent`) — Internal Quality Check**:
-   - **Contract**: [`DocumentReviewRequest`](file:///c:/Users/praty/OneDrive/Desktop/Research%20Agent/backend/schemas/schemas.py#L144-L148) & [`DocumentReviewResult`](file:///c:/Users/praty/OneDrive/Desktop/Research%20Agent/backend/schemas/schemas.py#L151-L156).
-   - **Pipeline Role**: Registered in the main pipeline graph (`graph`) as node `"document_review"` with an edge to `END`. It audits the finished draft output from `composer_agent` (checking fact verification, citation integrity, and formatting).
+   - **Contract**: `DocumentReviewRequest` & `DocumentReviewResult`.
+   - **Pipeline Role**: Registered in the main pipeline graph as node `"document_review"` with an edge to `END`. It audits the finished draft output from `composer_agent` (checking fact verification, citation integrity, and formatting).
    - **Usage**: Internal automated quality gating before final deliverable export; not intended for interactive chatting.
 
 2. **User Q&A Agent (`user_qa_agent`) — Always-On Interactive Chat**:
-   - **Contract**: [`UserQARequest`](file:///c:/Users/praty/OneDrive/Desktop/Research%20Agent/backend/schemas/schemas.py#L159-L161) & [`UserQAResponse`](file:///c:/Users/praty/OneDrive/Desktop/Research%20Agent/backend/schemas/schemas.py#L164-L166).
+   - **Contract**: `UserQARequest` & `UserQAResponse`.
    - **Pipeline Role**: Standalone entry-point graph (`qa_graph = qa_builder.compile()`), routing `START → user_qa → END`.
-   - **Usage**: Person C's frontend invokes `qa_graph.invoke(state)` at any time to answer user questions grounded in the ingested literature (`source_paper_ids`), independent of the main generation pipeline.
+   - **Usage**: Invoked at any time to answer user questions grounded in the ingested literature (`source_paper_ids`), independent of the main generation pipeline.

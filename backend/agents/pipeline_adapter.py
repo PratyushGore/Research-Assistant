@@ -22,7 +22,7 @@ def run_search_agent(state: PipelineState) -> PipelineState:
 
     search_result = search_papers(
         topic,
-        max_results_per_source=5,
+        max_results_per_source=8,
     )
 
     return {

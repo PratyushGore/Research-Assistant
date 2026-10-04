@@ -436,3 +436,230 @@
     flex: 1;
   }
 }
+
+/* =========================================
+   Document Preview Modal
+   ========================================= */
+
+.preview-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: modalFadeIn 0.2s ease-out;
+}
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.preview-modal-window {
+  width: min(1000px, 96vw);
+  height: min(880px, 92vh);
+  background: #0f0f0f;
+  border: 1px solid rgba(255, 91, 20, 0.35);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow:
+    0 25px 80px rgba(0, 0, 0, 0.8),
+    0 0 40px rgba(255, 91, 20, 0.1);
+  animation: modalSlideUp 0.25s ease-out;
+}
+
+@keyframes modalSlideUp {
+  from {
+    transform: translateY(16px) scale(0.98);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.preview-modal-header {
+  padding: 18px 24px;
+  background: #141414;
+  border-bottom: 1px solid #242424;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.preview-modal-badge {
+  display: inline-block;
+  color: #ff6a29;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  margin-bottom: 4px;
+}
+
+.preview-modal-header h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.3px;
+}
+
+.preview-modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.preview-header-download {
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
+.preview-modal-close {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #c0c0c0;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: 0.2s ease;
+}
+
+.preview-modal-close:hover {
+  border-color: #ff5b14;
+  color: #ffffff;
+  background: rgba(255, 91, 20, 0.1);
+}
+
+.preview-modal-notice {
+  background: rgba(255, 91, 20, 0.06);
+  border-bottom: 1px solid rgba(255, 91, 20, 0.18);
+  color: #ffb594;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.preview-modal-notice span {
+  color: #ff5b14;
+  font-weight: 700;
+}
+
+.preview-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  background: #181818;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-loading-state,
+.preview-error-state {
+  margin: auto;
+  text-align: center;
+  max-width: 460px;
+  padding: 40px 20px;
+}
+
+.preview-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 91, 20, 0.15);
+  border-top-color: #ff5b14;
+  border-radius: 50%;
+  animation: spinnerRotate 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spinnerRotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.preview-loading-state p {
+  color: #a0a0a0;
+  font-size: 14px;
+  margin: 0;
+}
+
+.preview-error-icon {
+  font-size: 36px;
+  margin-bottom: 12px;
+}
+
+.preview-error-state h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  color: #ffffff;
+}
+
+.preview-error-state p {
+  color: #fca5a5;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.preview-pdf-iframe {
+  width: 100%;
+  height: 100%;
+  min-height: 600px;
+  border: none;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.preview-render-container {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.docx-container {
+  background: #181818;
+}
+
+.docx-container .docx-wrapper {
+  background: transparent !important;
+  padding: 10px 0 !important;
+}
+
+.docx-container .docx {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+  margin-bottom: 20px !important;
+}
+
+.pptx-container {
+  background: #141414;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+}
