@@ -3,6 +3,32 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { getResearchResults, askQuestion, selectOutputs } from "../api";
 import "./ResearchResults.css";
 
+/**
+ * Determine a valid http(s) URL for a paper.
+ * - Uses paper.url if it is an http(s) URL
+ * - Otherwise, if paper_id starts with "arxiv:", constructs https://arxiv.org/abs/<id>
+ * - Rejects javascript: and other non-http(s) schemes
+ * - Returns null if no valid link exists
+ */
+export function getPaperUrl(paper) {
+  if (!paper) return null;
+  const rawUrl = paper.url ? String(paper.url).trim() : "";
+  if (rawUrl) {
+    if (/^https?:\/\//i.test(rawUrl)) {
+      return rawUrl;
+    }
+    return null;
+  }
+  const rawId = paper.paper_id ? String(paper.paper_id).trim() : "";
+  if (/^arxiv:/i.test(rawId)) {
+    const arxivId = rawId.slice(rawId.indexOf(":") + 1).trim();
+    if (arxivId) {
+      return `https://arxiv.org/abs/${encodeURIComponent(arxivId)}`;
+    }
+  }
+  return null;
+}
+
 function ResearchResults() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -14,6 +40,8 @@ function ResearchResults() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const [isSummariesExpanded, setIsSummariesExpanded] = useState(true);
+
   const [selectedOutputs, setSelectedOutputs] = useState([]);
   const [isSubmittingOutputs, setIsSubmittingOutputs] = useState(false);
   const [outputError, setOutputError] = useState(null);
@@ -22,6 +50,7 @@ function ResearchResults() {
   const [qaHistory, setQaHistory] = useState([]);
   const [isAsking, setIsAsking] = useState(false);
   const [qaError, setQaError] = useState(null);
+
 
   const outputs = [
     {
@@ -330,59 +359,117 @@ function ResearchResults() {
               <span className="card-eyebrow">LITERATURE EVIDENCE</span>
               <h2>Per-Paper Summaries</h2>
             </div>
-            <span className="section-pill">
-              {summaries.length} {summaries.length === 1 ? "Source" : "Sources"} Analyzed
-            </span>
+            <div className="section-header-actions">
+              {findings?.requested_papers != null && findings?.available_papers != null && (
+                <span className="section-pill paper-count-chip" data-testid="paper-count-chip">
+                  Requested {findings.requested_papers} - Analysed {findings.available_papers}
+                </span>
+              )}
+              <span className="section-pill">
+                {summaries.length} {summaries.length === 1 ? "Source" : "Sources"} Analyzed
+              </span>
+              <button
+                type="button"
+                className="collapse-toggle-button"
+                onClick={() => setIsSummariesExpanded((prev) => !prev)}
+                aria-expanded={isSummariesExpanded}
+                aria-controls="paper-summaries-collapsible"
+                aria-label={isSummariesExpanded ? "Collapse per-paper summaries" : "Expand per-paper summaries"}
+              >
+                <span>{isSummariesExpanded ? "Collapse" : "Expand"}</span>
+                <span
+                  className={`chevron-icon ${isSummariesExpanded ? "expanded" : "collapsed"}`}
+                  aria-hidden="true"
+                >
+                  ▾
+                </span>
+              </button>
+            </div>
           </div>
 
-          {summaries.length === 0 ? (
-            <p className="section-subtext" style={{ fontStyle: "italic", color: "#94a3b8" }}>
-              No individual paper summaries were returned.
-            </p>
-          ) : (
-            <div className="paper-summaries-list">
-              {summaries.map((paper, idx) => (
-                <div key={paper.paper_id || idx} className="paper-summary-item">
-                  <div className="paper-summary-header">
-                    <div className="paper-index">
-                      {idx + 1 < 10 ? `0${idx + 1}` : idx + 1}
-                    </div>
-                    <div>
-                      <h3>{paper.title || `Paper ID: ${paper.paper_id}`}</h3>
-                      <div className="paper-meta">
-                        <span>
-                          {paper.authors
-                            ? Array.isArray(paper.authors)
-                              ? paper.authors.join(", ")
-                              : paper.authors
-                            : `Source ID: ${paper.paper_id}`}
-                        </span>
-                        {paper.venue && (
-                          <>
-                            <span>•</span>
-                            <span>{paper.venue}</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <p className="paper-abstract">{paper.summary}</p>
-
-                  {paper.key_findings && paper.key_findings.length > 0 && (
-                    <div className="paper-key-findings">
-                      <strong>Key Findings:</strong>
-                      <ul>
-                        {paper.key_findings.map((finding, fIdx) => (
-                          <li key={fIdx}>{finding}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              ))}
+          {findings?.paper_notice && (
+            <div className="paper-notice-banner" role="alert" data-testid="paper-notice-banner">
+              <span className="notice-icon" aria-hidden="true">⚠️</span>
+              <span className="notice-text">{findings.paper_notice}</span>
             </div>
           )}
+
+          <div
+            id="paper-summaries-collapsible"
+            className={`collapsible-wrapper ${isSummariesExpanded ? "is-expanded" : "is-collapsed"}`}
+          >
+            <div className="collapsible-inner">
+              {summaries.length === 0 ? (
+                <p className="section-subtext" style={{ fontStyle: "italic", color: "#94a3b8" }}>
+                  No individual paper summaries were returned.
+                </p>
+              ) : (
+                <div className="paper-summaries-list">
+                  {summaries.map((paper, idx) => {
+                    const paperUrl = getPaperUrl(paper);
+
+                    return (
+                      <div key={paper.paper_id || idx} className="paper-summary-item">
+                        <div className="paper-summary-header">
+                          <div className="paper-index">
+                            {idx + 1 < 10 ? `0${idx + 1}` : idx + 1}
+                          </div>
+                          <div className="paper-summary-title-col">
+                            <h3>{paper.title || `Paper ID: ${paper.paper_id}`}</h3>
+                            <div className="paper-meta">
+                              <span>
+                                {paper.authors
+                                  ? Array.isArray(paper.authors)
+                                    ? paper.authors.join(", ")
+                                    : paper.authors
+                                  : `Source ID: ${paper.paper_id}`}
+                              </span>
+                              {paper.year && (
+                                <>
+                                  <span>•</span>
+                                  <span>{paper.year}</span>
+                                </>
+                              )}
+                              {paper.venue && (
+                                <>
+                                  <span>•</span>
+                                  <span>{paper.venue}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          {paperUrl && (
+                            <a
+                              href={paperUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="view-paper-button"
+                            >
+                              View paper
+                              <span aria-hidden="true"> ↗</span>
+                            </a>
+                          )}
+                        </div>
+
+                        <p className="paper-abstract">{paper.summary}</p>
+
+                        {paper.key_findings && paper.key_findings.length > 0 && (
+                          <div className="paper-key-findings">
+                            <strong>Key Findings:</strong>
+                            <ul>
+                              {paper.key_findings.map((finding, fIdx) => (
+                                <li key={fIdx}>{finding}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </section>
 
         {/* 3. Claims with Verification Status */}

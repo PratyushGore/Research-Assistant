@@ -1,14 +1,62 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { startResearch } from "../api";
+import { startResearch, getLastMaxPapers, setLastMaxPapers } from "../api";
 import "./ResearchSetup.css";
 
 function ResearchSetup() {
   const navigate = useNavigate();
 
   const [topic, setTopic] = useState("");
+  const [maxPapers, setMaxPapers] = useState(() => getLastMaxPapers());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  const handleDecrement = () => {
+    const current = parseInt(maxPapers, 10) || 8;
+    const next = Math.max(3, current - 1);
+    setMaxPapers(next);
+    setLastMaxPapers(next);
+  };
+
+  const handleIncrement = () => {
+    const current = parseInt(maxPapers, 10) || 8;
+    const next = Math.min(15, current + 1);
+    setMaxPapers(next);
+    setLastMaxPapers(next);
+  };
+
+  const handlePaperCountChange = (event) => {
+    const val = event.target.value;
+    if (val === "") {
+      setMaxPapers("");
+      return;
+    }
+    const num = parseInt(val, 10);
+    if (isNaN(num)) return;
+    if (num > 15) {
+      setMaxPapers(15);
+      setLastMaxPapers(15);
+    } else {
+      setMaxPapers(num);
+      if (num >= 3) {
+        setLastMaxPapers(num);
+      }
+    }
+  };
+
+  const handlePaperCountBlur = () => {
+    const num = parseInt(maxPapers, 10);
+    if (isNaN(num) || num < 3) {
+      setMaxPapers(3);
+      setLastMaxPapers(3);
+    } else if (num > 15) {
+      setMaxPapers(15);
+      setLastMaxPapers(15);
+    } else {
+      setMaxPapers(num);
+      setLastMaxPapers(num);
+    }
+  };
 
   const handleContinue = async () => {
     const cleanedTopic = topic.trim();
@@ -17,15 +65,18 @@ function ResearchSetup() {
       return;
     }
 
+    const validatedPapers = setLastMaxPapers(maxPapers);
+    setMaxPapers(validatedPapers);
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await startResearch(cleanedTopic);
+      const response = await startResearch(cleanedTopic, validatedPapers);
       navigate("/research-progress", {
         state: {
           session_id: response.session_id,
           topic: cleanedTopic,
+          max_papers: validatedPapers,
           phase: "research",
         },
       });
@@ -116,6 +167,51 @@ function ResearchSetup() {
                 ⚠️ {error}
               </div>
             )}
+          </div>
+
+          {/* Number of research papers */}
+          <div className="paper-count-section">
+            <label htmlFor="max-papers-input">
+              Number of research papers
+            </label>
+
+            <div className="stepper-control">
+              <button
+                type="button"
+                className="stepper-button"
+                onClick={handleDecrement}
+                disabled={isLoading || (typeof maxPapers === "number" ? maxPapers <= 3 : parseInt(maxPapers, 10) <= 3)}
+                aria-label="Decrease papers"
+              >
+                -
+              </button>
+
+              <input
+                id="max-papers-input"
+                className="stepper-input"
+                type="number"
+                min="3"
+                max="15"
+                value={maxPapers}
+                onChange={handlePaperCountChange}
+                onBlur={handlePaperCountBlur}
+                aria-label="Number of research papers"
+              />
+
+              <button
+                type="button"
+                className="stepper-button"
+                onClick={handleIncrement}
+                disabled={isLoading || (typeof maxPapers === "number" ? maxPapers >= 15 : parseInt(maxPapers, 10) >= 15)}
+                aria-label="Increase papers"
+              >
+                +
+              </button>
+            </div>
+
+            <div className="input-hint">
+              More papers take longer to analyse
+            </div>
           </div>
 
           {/* Footer */}

@@ -1,7 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { getDownloadUrl, getResults } from "../api";
+import { getDownloadUrl, getResults, fetchDeliverableFile } from "../api";
 import "./Outputs.css";
+
+/**
+ * Determine deliverable file type for preview rendering.
+ * Supports docx, pptx, and pdf based on download URL or deliverable ID.
+ */
+export function getDeliverableFileType(resultItem, outputDef) {
+  const url = (resultItem?.download_url || "").toLowerCase();
+  if (url.includes(".docx")) return "docx";
+  if (url.includes(".pptx")) return "pptx";
+  if (url.includes(".pdf")) return "pdf";
+  const id = (outputDef?.id || "").toLowerCase();
+  if (id === "ppt") return "pptx";
+  return "docx";
+}
 
 function Outputs() {
   const navigate = useNavigate();
@@ -16,6 +30,24 @@ function Outputs() {
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Preview modal state & refs
+  const [previewModal, setPreviewModal] = useState({
+    isOpen: false,
+    title: "",
+    downloadUrl: "",
+    fileType: "",
+    isLoading: false,
+    error: null,
+    pdfBlobUrl: null,
+  });
+
+  const previewContainerRef = useRef(null);
+  const pptxPreviewerRef = useRef(null);
+  const modalRef = useRef(null);
+  const closeButtonRef = useRef(null);
+  const currentBlobUrlRef = useRef(null);
+
 
   // If results were not in state but session_id is available, fetch them
   useEffect(() => {
@@ -96,6 +128,166 @@ function Outputs() {
   const handleBack = () => {
     navigate("/research");
   };
+
+  const handleClosePreview = useCallback(() => {
+    if (currentBlobUrlRef.current) {
+      URL.revokeObjectURL(currentBlobUrlRef.current);
+      currentBlobUrlRef.current = null;
+    }
+    if (pptxPreviewerRef.current) {
+      try {
+        pptxPreviewerRef.current.destroy?.();
+      } catch {
+        // ignore
+      }
+      pptxPreviewerRef.current = null;
+    }
+    if (previewContainerRef.current) {
+      previewContainerRef.current.innerHTML = "";
+    }
+    document.body.style.overflow = "";
+
+    setPreviewModal({
+      isOpen: false,
+      title: "",
+      downloadUrl: "",
+      fileType: "",
+      isLoading: false,
+      error: null,
+      pdfBlobUrl: null,
+    });
+  }, []);
+
+  const handleOpenPreview = async (output, resultItem) => {
+    const downloadUrl = resultItem
+      ? getDownloadUrl(resultItem.download_url)
+      : null;
+    if (!downloadUrl) return;
+
+    const fileType = getDeliverableFileType(resultItem, output);
+
+    setPreviewModal({
+      isOpen: true,
+      title: output.title,
+      downloadUrl,
+      fileType,
+      isLoading: true,
+      error: null,
+      pdfBlobUrl: null,
+    });
+
+    document.body.style.overflow = "hidden";
+
+    try {
+      const { blob, arrayBuffer } = await fetchDeliverableFile(downloadUrl);
+
+      if (fileType === "docx") {
+        const docxModule = await import("docx-preview");
+        const renderAsync =
+          docxModule.renderAsync || docxModule.default?.renderAsync;
+        if (!renderAsync) {
+          throw new Error("docx-preview rendering engine not available.");
+        }
+        setPreviewModal((prev) => ({ ...prev, isLoading: false }));
+        setTimeout(async () => {
+          if (previewContainerRef.current) {
+            previewContainerRef.current.innerHTML = "";
+            await renderAsync(
+              arrayBuffer,
+              previewContainerRef.current,
+              undefined,
+              {
+                inWrapper: true,
+                ignoreWidth: false,
+                breakPages: true,
+              }
+            );
+          }
+        }, 0);
+      } else if (fileType === "pptx") {
+        const pptxModule = await import("pptx-preview");
+        const init = pptxModule.init || pptxModule.default?.init;
+        if (!init) {
+          throw new Error("pptx-preview rendering engine not available.");
+        }
+        setPreviewModal((prev) => ({ ...prev, isLoading: false }));
+        setTimeout(async () => {
+          if (previewContainerRef.current) {
+            previewContainerRef.current.innerHTML = "";
+            const previewer = init(previewContainerRef.current, {
+              mode: "slide",
+            });
+            pptxPreviewerRef.current = previewer;
+            await previewer.preview(arrayBuffer);
+          }
+        }, 0);
+      } else if (fileType === "pdf") {
+        const pdfBlobUrl = URL.createObjectURL(blob);
+        currentBlobUrlRef.current = pdfBlobUrl;
+        setPreviewModal((prev) => ({
+          ...prev,
+          isLoading: false,
+          pdfBlobUrl,
+        }));
+      } else {
+        throw new Error(`Preview not supported for file format: ${fileType}`);
+      }
+    } catch (err) {
+      console.error("Preview render failed:", err);
+      setPreviewModal((prev) => ({
+        ...prev,
+        isLoading: false,
+        error:
+          err.message ||
+          "Failed to render document preview. The file can still be downloaded directly.",
+      }));
+    }
+  };
+
+  // Keyboard accessibility: Escape to close, focus trapping, cleanup
+  useEffect(() => {
+    if (!previewModal.isOpen) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        handleClosePreview();
+        return;
+      }
+
+      if (e.key === "Tab" && modalRef.current) {
+        const focusableElements = modalRef.current.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusableElements.length === 0) return;
+        const firstEl = focusableElements[0];
+        const lastEl = focusableElements[focusableElements.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === firstEl) {
+            e.preventDefault();
+            lastEl.focus();
+          }
+        } else {
+          if (document.activeElement === lastEl) {
+            e.preventDefault();
+            firstEl.focus();
+          }
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    const focusTimer = setTimeout(() => {
+      closeButtonRef.current?.focus();
+    }, 50);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      clearTimeout(focusTimer);
+      document.body.style.overflow = "";
+    };
+  }, [previewModal.isOpen, handleClosePreview]);
 
   return (
     <div className="outputs-page">
@@ -212,20 +404,14 @@ function Outputs() {
                     <div className="output-actions">
                       {downloadUrl ? (
                         <>
-                          <a
-                            href={downloadUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <button
+                            type="button"
+                            onClick={() => handleOpenPreview(output, resultItem)}
                             className="preview-button"
-                            style={{
-                              textDecoration: "none",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
+                            aria-label={`Preview ${output.title}`}
                           >
                             Preview
-                          </a>
+                          </button>
 
                           <a
                             href={downloadUrl}
@@ -285,6 +471,122 @@ function Outputs() {
           </button>
         </div>
       </main>
+
+      {/* Real Document Preview Modal */}
+      {previewModal.isOpen && (
+        <div
+          className="preview-modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              handleClosePreview();
+            }
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="preview-modal-title"
+        >
+          <div className="preview-modal-window" ref={modalRef}>
+            <header className="preview-modal-header">
+              <div>
+                <span className="preview-modal-badge">
+                  {previewModal.fileType.toUpperCase()} PREVIEW
+                </span>
+                <h2 id="preview-modal-title">{previewModal.title}</h2>
+              </div>
+
+              <div className="preview-modal-header-actions">
+                <a
+                  href={previewModal.downloadUrl}
+                  download
+                  className="download-button preview-header-download"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ textDecoration: "none" }}
+                >
+                  Download
+                  <span>↓</span>
+                </a>
+                <button
+                  type="button"
+                  ref={closeButtonRef}
+                  className="preview-modal-close"
+                  onClick={handleClosePreview}
+                  aria-label="Close preview"
+                >
+                  ✕
+                </button>
+              </div>
+            </header>
+
+            <div className="preview-modal-notice">
+              <span>ℹ</span> In-browser preview rendering may differ slightly from native Word/PowerPoint layout. For full fidelity (two-column academic formatting, exact figures, and slide geometries), please download the file.
+            </div>
+
+            <div className="preview-modal-body">
+              {previewModal.isLoading && (
+                <div className="preview-loading-state">
+                  <div className="preview-spinner"></div>
+                  <p>
+                    Loading and rendering {previewModal.fileType.toUpperCase()}{" "}
+                    document...
+                  </p>
+                </div>
+              )}
+
+              {previewModal.error && (
+                <div className="preview-error-state">
+                  <div className="preview-error-icon">⚠️</div>
+                  <h3>Unable to render in-browser preview</h3>
+                  <p>{previewModal.error}</p>
+                  <a
+                    href={previewModal.downloadUrl}
+                    download
+                    className="download-button"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      marginTop: "14px",
+                      textDecoration: "none",
+                      display: "inline-flex",
+                    }}
+                  >
+                    Download instead
+                    <span>↓</span>
+                  </a>
+                </div>
+              )}
+
+              {previewModal.fileType === "pdf" &&
+                previewModal.pdfBlobUrl &&
+                !previewModal.isLoading &&
+                !previewModal.error && (
+                  <iframe
+                    src={previewModal.pdfBlobUrl}
+                    title={`${previewModal.title} PDF Preview`}
+                    className="preview-pdf-iframe"
+                  />
+                )}
+
+              <div
+                ref={previewContainerRef}
+                className={`preview-render-container ${
+                  previewModal.fileType === "pptx"
+                    ? "pptx-container"
+                    : "docx-container"
+                }`}
+                style={{
+                  display:
+                    previewModal.isLoading ||
+                    previewModal.error ||
+                    previewModal.fileType === "pdf"
+                      ? "none"
+                      : "block",
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
