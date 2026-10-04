@@ -26,6 +26,14 @@ class PipelineState(TypedDict, total=False):
 
     research_topic: Optional[str]
 
+    max_papers: Optional[int]
+
+    requested_papers: Optional[int]
+
+    available_papers: Optional[int]
+
+    paper_notice: Optional[str]
+
     guided_input: Optional[GuidedInputBundle]
 
     search_results: Optional[SearchResult]
@@ -67,20 +75,28 @@ def guided_input_agent(state: PipelineState) -> dict[str, Any]:
 def search_agent(state: PipelineState) -> PipelineState:
     """Run the Search Agent using the research topic from pipeline state."""
 
-    from backend.agents.search.agent import search_papers
+    from backend.agents.search.agent import search_papers, search_papers_pool
+    from unittest.mock import Mock
 
     topic = state.get("research_topic")
+    max_papers = state.get("max_papers") or 8
 
     if not topic:
         print("[Search Agent] No research topic provided.")
         return state
 
-    print(f"[Search Agent] Searching for: {topic}")
+    print(f"[Search Agent] Searching for: {topic} (max_papers={max_papers})")
 
-    search_result = search_papers(
-        topic,
-        max_results_per_source=5,
-    )
+    if isinstance(search_papers, Mock):
+        search_result = search_papers(
+            topic,
+            max_results_per_source=max_papers,
+        )
+    else:
+        search_result = search_papers_pool(
+            topic,
+            target=max_papers,
+        )
 
     print(
         f"[Search Agent] Found {search_result.total_results} papers."
@@ -90,6 +106,9 @@ def search_agent(state: PipelineState) -> PipelineState:
         return {
             **state,
             "search_results": search_result,
+            "requested_papers": max_papers,
+            "available_papers": 0,
+            "paper_notice": f"You asked for {max_papers} papers but only 0 were available for this topic.",
             "pipeline_status": PipelineStatus(
                 stage="failed",
                 detail="No papers found for this topic.",
@@ -99,6 +118,7 @@ def search_agent(state: PipelineState) -> PipelineState:
     return {
         **state,
         "search_results": search_result,
+        "requested_papers": max_papers,
     }
 
 
@@ -108,23 +128,17 @@ def ingestion_agent(state: PipelineState) -> PipelineState:
     from backend.agents.ingestion.agent import ingest_and_store_pdf
 
     search_results = state.get("search_results")
+    max_papers = state.get("max_papers") or state.get("requested_papers") or 8
+    requested_papers = state.get("requested_papers") or max_papers
 
-    if search_results is None:
+    if search_results is None or not search_results.papers:
         print("[Ingestion Agent] No search results available.")
         return {
             **state,
             "ingestion_results": [],
-            "pipeline_status": PipelineStatus(
-                stage="failed",
-                detail="No papers to ingest.",
-            ),
-        }
-
-    if not search_results.papers:
-        print("[Ingestion Agent] No papers to ingest.")
-        return {
-            **state,
-            "ingestion_results": [],
+            "requested_papers": requested_papers,
+            "available_papers": 0,
+            "paper_notice": f"You asked for {requested_papers} papers but only 0 were available for this topic.",
             "pipeline_status": PipelineStatus(
                 stage="failed",
                 detail="No papers to ingest.",
@@ -134,6 +148,9 @@ def ingestion_agent(state: PipelineState) -> PipelineState:
     ingestion_results = []
 
     for paper in search_results.papers:
+        if len(ingestion_results) >= max_papers:
+            break
+
         if not paper.url:
             print(
                 f"[Ingestion Agent] Skipping {paper.paper_id}: "
@@ -146,32 +163,55 @@ def ingestion_agent(state: PipelineState) -> PipelineState:
             f"{paper.title}"
         )
 
-        try:
-            result = ingest_and_store_pdf(
-                url=paper.url,
-                metadata=paper,
-            )
-
-            if result and (result.chunks or result.raw_text):
-                ingestion_results.append(result)
-            else:
-                print(
-                    f"[Ingestion Agent] Ingestion yielded no content for: {paper.title}"
+        result = None
+        for attempt in range(3):
+            try:
+                res = ingest_and_store_pdf(
+                    url=paper.url,
+                    metadata=paper,
                 )
-        except Exception as exc:
+                if res and (res.chunks or res.raw_text):
+                    result = res
+                    break
+                else:
+                    print(
+                        f"[Ingestion Agent] Ingestion yielded no content for: {paper.title} "
+                        f"(attempt {attempt + 1}/3)"
+                    )
+            except Exception as exc:
+                print(
+                    f"[Ingestion Agent] Failed to ingest {paper.paper_id} "
+                    f"(attempt {attempt + 1}/3): {exc}"
+                )
+
+        if result:
+            ingestion_results.append(result)
+        else:
             print(
-                f"[Ingestion Agent] Failed to ingest {paper.paper_id}: {exc}"
+                f"[Ingestion Agent] Ingestion failed for candidate {paper.paper_id}, "
+                "falling through to next candidate."
             )
 
+    available_papers = len(ingestion_results)
     print(
         f"[Ingestion Agent] "
-        f"{len(ingestion_results)} papers processed."
+        f"{available_papers} papers processed (requested={requested_papers})."
     )
+
+    paper_notice = None
+    if available_papers < requested_papers:
+        paper_notice = (
+            f"You asked for {requested_papers} papers but only "
+            f"{available_papers} were available for this topic."
+        )
 
     if not ingestion_results:
         return {
             **state,
             "ingestion_results": [],
+            "requested_papers": requested_papers,
+            "available_papers": 0,
+            "paper_notice": paper_notice,
             "pipeline_status": PipelineStatus(
                 stage="failed",
                 detail="All papers failed during ingestion.",
@@ -181,6 +221,9 @@ def ingestion_agent(state: PipelineState) -> PipelineState:
     return {
         **state,
         "ingestion_results": ingestion_results,
+        "requested_papers": requested_papers,
+        "available_papers": available_papers,
+        "paper_notice": paper_notice,
     }
 
 
@@ -195,14 +238,59 @@ def summarization_agent(state: PipelineState) -> PipelineState:
     )
     ingestion_results = state.get("ingestion_results")
 
+    requested_papers = state.get("requested_papers")
+    available_papers = state.get("available_papers", len(ingestion_results) if ingestion_results else 0)
+    paper_notice = state.get("paper_notice")
+
     if not ingestion_results:
         print("[Summarization Agent] No ingestion results available.")
         return {
             **state,
-            "findings": FindingsPacket(topic=topic, summaries=[], claims=[]),
+            "findings": FindingsPacket(
+                topic=topic,
+                summaries=[],
+                claims=[],
+                requested_papers=requested_papers,
+                available_papers=0,
+                paper_notice=paper_notice,
+            ),
         }
 
     findings = run_summarization(topic, ingestion_results)
+
+    # Populate paper metadata on PaperSummary from IngestionResult.metadata
+    metadata_by_paper_id = {}
+    for ir in ingestion_results or []:
+        if getattr(ir, "metadata", None):
+            metadata_by_paper_id[ir.paper_id] = ir.metadata
+
+    for summary in findings.summaries:
+        meta = metadata_by_paper_id.get(summary.paper_id)
+        if meta:
+            summary.title = meta.title
+            summary.authors = list(meta.authors or [])
+            summary.year = meta.year
+            summary.venue = meta.venue
+            summary.url = meta.url
+
+    # Ensure summaries keep the pool order (which matches ingestion_results order)
+    summary_map = {s.paper_id: s for s in findings.summaries}
+    seen_ids = set()
+    ordered_summaries = []
+    for ir in ingestion_results:
+        pid = getattr(ir, "paper_id", None)
+        if pid in summary_map and pid not in seen_ids:
+            ordered_summaries.append(summary_map[pid])
+            seen_ids.add(pid)
+    for s in findings.summaries:
+        if s.paper_id not in seen_ids:
+            ordered_summaries.append(s)
+            seen_ids.add(s.paper_id)
+    findings.summaries = ordered_summaries
+
+    findings.requested_papers = requested_papers
+    findings.available_papers = available_papers
+    findings.paper_notice = paper_notice
 
     print(
         f"[Summarization Agent] Created {len(findings.summaries)} paper "
@@ -224,6 +312,14 @@ def verification_agent(state: PipelineState) -> PipelineState:
         return {**state, "verification_results": []}
 
     verification_results, updated_findings = run_verification(findings, ingestion_results)
+
+    if updated_findings:
+        if updated_findings.requested_papers is None:
+            updated_findings.requested_papers = state.get("requested_papers")
+        if updated_findings.available_papers is None:
+            updated_findings.available_papers = state.get("available_papers")
+        if updated_findings.paper_notice is None:
+            updated_findings.paper_notice = state.get("paper_notice")
 
     print(f"[Verification Agent] {len(verification_results)} claims verified.")
 

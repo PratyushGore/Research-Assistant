@@ -90,7 +90,7 @@ class SessionStore(Mapping[str, dict[str, Any]]):
         self._lock = threading.RLock()
         self._agent = agent or guided_input_agent
 
-    def start_research(self, topic: str) -> str:
+    def start_research(self, topic: str, max_papers: int = 8) -> str:
         """
         Create a new session in 'researching' status with the research topic stored.
         Does not invoke the graph itself. Returns session_id.
@@ -106,6 +106,10 @@ class SessionStore(Mapping[str, dict[str, Any]]):
                 "session_id": session_id,
                 "research_topic": norm_topic,
                 "topic": norm_topic,
+                "max_papers": max_papers,
+                "requested_papers": max_papers,
+                "available_papers": None,
+                "paper_notice": None,
                 "findings": None,
                 "citations": None,
                 "output_types": [],
@@ -144,6 +148,12 @@ class SessionStore(Mapping[str, dict[str, Any]]):
 
             record["findings"] = findings
             record["citations"] = citations
+            if hasattr(findings, "requested_papers") and findings.requested_papers is not None:
+                record["requested_papers"] = findings.requested_papers
+            if hasattr(findings, "available_papers") and findings.available_papers is not None:
+                record["available_papers"] = findings.available_papers
+            if hasattr(findings, "paper_notice") and findings.paper_notice is not None:
+                record["paper_notice"] = findings.paper_notice
             record["status"] = SessionStatus.RESEARCH_DONE.value
 
     def get_research_results(self, session_id: str) -> tuple[Any, Any]:
@@ -441,9 +451,9 @@ class SessionStore(Mapping[str, dict[str, Any]]):
 session_store = SessionStore()
 
 
-def start_research(topic: str) -> str:
+def start_research(topic: str, max_papers: int = 8) -> str:
     """Create a new session in researching status in the default session store."""
-    return session_store.start_research(topic)
+    return session_store.start_research(topic, max_papers=max_papers)
 
 
 def store_research_results(

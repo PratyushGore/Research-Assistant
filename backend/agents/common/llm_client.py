@@ -21,6 +21,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
+try:
+    from google.api_core.exceptions import DeadlineExceeded
+except ImportError:
+    class DeadlineExceeded(Exception):
+        pass
+
 logger = logging.getLogger("research_assistant.llm")
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
@@ -28,7 +34,7 @@ if not logger.handlers:
 CACHE_DIR = Path(os.environ.get("RA_CACHE_DIR", ".cache/llm"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 
 def _prompt_hash(prompt: str) -> str:
@@ -105,7 +111,22 @@ class GeminiClient:
 
         model = self._ensure_model()
         start = time.time()
-        result = model.generate_content(prompt)
+        try:
+            result = model.generate_content(prompt, request_options={"timeout": 30})
+        except (TimeoutError, DeadlineExceeded) as exc:
+            logger.error(
+                "[LLM TIMEOUT] agent=%s paper_id=%s purpose=%s after 30s: %s",
+                agent_name, paper_id, purpose, exc,
+            )
+            raise TimeoutError("LLM call timed out") from exc
+        except Exception as exc:
+            if "timed out" in str(exc).lower() or "deadline exceeded" in str(exc).lower():
+                logger.error(
+                    "[LLM TIMEOUT] agent=%s paper_id=%s purpose=%s: %s",
+                    agent_name, paper_id, purpose, exc,
+                )
+                raise TimeoutError("LLM call timed out") from exc
+            raise
         elapsed = time.time() - start
 
         text = (result.text or "").strip()
