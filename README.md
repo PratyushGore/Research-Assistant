@@ -358,10 +358,10 @@ npm run build
 
 | Role | Domain / Responsibilities | Assigned Engineer |
 | :--- | :--- | :--- |
-| **Person A** | **Academic Search, Document Ingestion & Vector Storage**<br>• Semantic Scholar, arXiv, and CORE search adapters<br>• PyMuPDF parsing, text chunking, and local PDF cache<br>• ChromaDB vector store and SentenceTransformers embeddings | *[Name / ID Placeholder]* |
-| **Person B** | **Summarization & Citation Engineering**<br>• Individual per-paper summary and claim extraction<br>• Cross-paper comparative synthesis<br>• IEEE and APA bibliographic formatting and in-text citation markers | *[Name / ID Placeholder]* |
-| **Person C** | **Guided Input, Document Composition, Renderers & Frontend**<br>• Three-tier guided input questionnaire for student project details<br>• PPTX, DOCX, and PDF composers with structured layout templates<br>• React SPA implementation, live preview modals, and downloads | *[Name / ID Placeholder]* |
-| **Person D** | **Claim Verification, Orchestrator Architecture & API Layer**<br>• NLI-based claim grounding and contradiction detection with multi-threading<br>• LangGraph pipeline coordination and state machine routing<br>• FastAPI REST endpoints, WebSocket progress streaming, and test harnesses | *[Name / ID Placeholder]* |
+| **Person A** | **Academic Search, Document Ingestion & Vector Storage**<br>• Semantic Scholar, arXiv, and CORE search adapters<br>• PyMuPDF parsing, text chunking, and local PDF cache<br>• ChromaDB vector store and SentenceTransformers embeddings |
+| **Person B** | **Summarization & Citation Engineering**<br>• Individual per-paper summary and claim extraction<br>• Cross-paper comparative synthesis<br>• IEEE and APA bibliographic formatting and in-text citation markers |
+| **Person C** | **Guided Input, Document Composition, Renderers & Frontend**<br>• Three-tier guided input questionnaire for student project details<br>• PPTX, DOCX, and PDF composers with structured layout templates<br>• React SPA implementation, live preview modals, and downloads | 
+| **Person D** | **Claim Verification, Orchestrator Architecture & API Layer**<br>• NLI-based claim grounding and contradiction detection with multi-threading<br>• LangGraph pipeline coordination and state machine routing<br>• FastAPI REST endpoints, WebSocket progress streaming, and test harnesses |
 
 ---
 
